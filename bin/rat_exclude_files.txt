@@ -117,6 +117,7 @@ fe/src/test/resources/*.xml
 fe/src/test/resources/hbase-jaas-client.conf.template
 fe/src/test/resources/hbase-jaas-server.conf.template
 fe/src/test/resources/users.ldif
+impala-parent/.mvn/maven.config
 testdata/AllTypesError/*.txt
 testdata/AllTypesErrorNoNulls/*.txt
 *.avsc
