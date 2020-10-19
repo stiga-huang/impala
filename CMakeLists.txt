@@ -24,6 +24,14 @@ set(NO_TESTS 1)
 # initialized.
 project(Impala)
 
+option(BUILD_PACKAGES "Build installater packages")
+#TODO: make sure version info is generated
+file(READ "bin/version.info" version_file)
+if(${version_file} MATCHES "VERSION: ([0-9][0-9]?\\.[0-9][0-9]?\\.[0-9][0-9]?[^ \t\r\n]*)")
+  message (STATUS "ver=${CMAKE_MATCH_1}")
+  set(IMPALA_VERSION ${CMAKE_MATCH_1})
+endif()
+
 include(cmake_modules/kudu_cmake_fns.txt)
 
 if (NOT DEFINED BUILD_SHARED_LIBS)
@@ -452,6 +460,37 @@ add_subdirectory(be)
 add_subdirectory(docker)
 add_subdirectory(java)
 
+## installation path
+set(CMAKE_INSTALL_PREFIX "/opt")
+set(IMPALA_INSTALLDIR "impala" CACHE INTERNAL "")
+
+install(DIRECTORY "www/" DESTINATION ${IMPALA_INSTALLDIR}/www)
+install(FILES fe/target/impala-frontend-${IMPALA_VERSION}.jar
+  DESTINATION ${IMPALA_INSTALLDIR}/jar)
+
+FILE(GLOB hdfs_lib ${HDFS_LIB_PATHS}/libhdfs.so*)
+install(FILES ${hdfs_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
+
+set(IMPALA_GCC_HOME $ENV{IMPALA_TOOLCHAIN_PACKAGES_HOME}/gcc-$ENV{IMPALA_GCC_VERSION})
+FILE(GLOB gcc_lib ${IMPALA_GCC_HOME}/lib64/libgcc_s.so.1*)
+install(FILES ${gcc_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
+
+FILE(GLOB cpp_lib ${IMPALA_GCC_HOME}/lib64/libstdc++.so.6*)
+install(FILES ${cpp_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
+
+FILE(GLOB hadoop_lib ${HDFS_LIB_PATHS}/libhadoop.so*)
+install(FILES ${hadoop_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
+
+set(KUDU_HOME $ENV{IMPALA_TOOLCHAIN_PACKAGES_HOME}/kudu-$ENV{IMPALA_KUDU_VERSION}/release)
+FILE(GLOB kudu_lib ${KUDU_HOME}/lib/libkudu_client.so*)
+install(FILES ${kudu_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
+
+install(DIRECTORY fe/target/dependency/ DESTINATION ${IMPALA_INSTALLDIR}/jar
+        FILES_MATCHING
+          PATTERN "*.jar")
+install(DIRECTORY shell/build/impala-shell-${IMPALA_VERSION}/ DESTINATION ${IMPALA_INSTALLDIR}/shell
+        USE_SOURCE_PERMISSIONS PATTERN "*.pyc" EXCLUDE)
+
 # Build target for all generated files which most backend code depends on
 add_custom_target(gen-deps ALL DEPENDS thrift-deps proto-deps fb-deps
   kudu-util-proto-deps kudu-rpc-proto-deps kudu-security-proto-deps)
@@ -495,3 +534,49 @@ if (DUMP_INCLUDE_PATHS)
 endif(DUMP_INCLUDE_PATHS)
 
 SET(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -stdlib=libstdc++")
+
+# packaging
+if (BUILD_PACKAGES)
+
+  if(EXISTS "/etc/redhat-release")
+    set(IMPALA_LINUX_ID_FILE "/etc/redhat-release")
+  elseif(EXISTS "/etc/os-release")
+    set(IMPALA_LINUX_ID_FILE "/etc/os-release")
+  elseif(EXISTS "/etc/issue")
+    set(IMPALA_LINUX_ID_FILE "/etc/issue")
+  else()
+    message(FATAL_ERROR "Can not determine OS version!")
+  endif()
+  file(READ ${IMPALA_LINUX_ID_FILE} IMPALA_OS_INFO)
+
+  string(TOLOWER ${IMPALA_OS_INFO} IMPALA_OS_INFO)
+  if(${IMPALA_OS_INFO} MATCHES "(redhat|centos)")
+    set(CPACK_GENERATOR "RPM")
+  elseif(${IMPALA_OS_INFO} MATCHES "ubuntu")
+    set(CPACK_GENERATOR "DEB")
+  endif()
+
+  if(CPACK_GENERATOR)
+    message(STATUS "Packaging enabled: ${CPACK_GENERATOR}")
+    set(CPACK_PACKAGE_NAME ${CMAKE_PROJECT_NAME})
+    set(CPACK_PACKAGE_VENDOR "Apache")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "An open source massively parallel processing SQL query engine.")
+    set(CPACK_PACKAGE_CONTACT "Maintainer: dev@impala.apache.org")
+    set(CPACK_PACKAGE_HOMEPAGE_URL "https://impala.apache.org")
+    set(CPACK_PACKAGE_VERSION "${IMPALA_VERSION}")
+    set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}_$ENV{IMPALA_HADOOP_VERSION}-${CMAKE_SYSTEM_PROCESSOR}")
+    set(CPACK_RPM_PACKAGE_LICENSE "ASL-2.0")
+    set(CPACK_STRIP_FILES ${IMPALA_INSTALLDIR}/bin/impalad)
+
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/opt")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "impala")
+
+    set(CPACK_RPM_PACKAGE_AUTOREQPROV " no")
+    set(CPACK_RPM_PACKAGE_RELOCATABLE TRUE)
+
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libbz2-1.0,zlib1g,libstdc++6,libc6,libevent-1.4-2,libunwind7,libgcc1")
+  endif()
+
+include(CPack)
+
+endif()
