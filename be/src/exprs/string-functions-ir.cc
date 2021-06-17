@@ -24,6 +24,7 @@
 #include <re2/stringpiece.h>
 
 #include <boost/static_assert.hpp>
+#include <boost/locale/conversion.hpp>
 
 #include "exprs/anyval-util.h"
 #include "exprs/scalar-expr.h"
@@ -282,6 +283,14 @@ IntVal StringFunctions::Utf8Length(FunctionContext* context, const StringVal& st
 
 StringVal StringFunctions::Lower(FunctionContext* context, const StringVal& str) {
   if (str.is_null) return StringVal::null();
+  if (context->impl()->GetConstFnAttr(FunctionContextImpl::UTF8_MODE)) {
+    return LowerUtf8(context, str);
+  }
+  return LowerAscii(context, str);
+}
+
+StringVal StringFunctions::LowerAscii(FunctionContext* context, const StringVal& str) {
+  // Not in UTF-8 mode, only English alphabetic characters will be converted.
   StringVal result(context, str.len);
   if (UNLIKELY(result.is_null)) return StringVal::null();
   for (int i = 0; i < str.len; ++i) {
@@ -292,6 +301,14 @@ StringVal StringFunctions::Lower(FunctionContext* context, const StringVal& str)
 
 StringVal StringFunctions::Upper(FunctionContext* context, const StringVal& str) {
   if (str.is_null) return StringVal::null();
+  if (context->impl()->GetConstFnAttr(FunctionContextImpl::UTF8_MODE)) {
+    return UpperUtf8(context, str);
+  }
+  return UpperAscii(context, str);
+}
+
+StringVal StringFunctions::UpperAscii(FunctionContext* context, const StringVal& str) {
+  // Not in UTF-8 mode, only English alphabetic characters will be converted.
   StringVal result(context, str.len);
   if (UNLIKELY(result.is_null)) return StringVal::null();
   for (int i = 0; i < str.len; ++i) {
@@ -306,6 +323,13 @@ StringVal StringFunctions::Upper(FunctionContext* context, const StringVal& str)
 // will return NULL
 StringVal StringFunctions::InitCap(FunctionContext* context, const StringVal& str) {
   if (str.is_null) return StringVal::null();
+  if (context->impl()->GetConstFnAttr(FunctionContextImpl::UTF8_MODE)) {
+    return InitCapUtf8(context, str);
+  }
+  return InitCapAscii(context, str);
+}
+
+StringVal StringFunctions::InitCapAscii(FunctionContext* context, const StringVal& str) {
   StringVal result(context, str.len);
   if (UNLIKELY(result.is_null)) return StringVal::null();
   uint8_t* result_ptr = result.ptr;
@@ -320,6 +344,82 @@ StringVal StringFunctions::InitCap(FunctionContext* context, const StringVal& st
     }
   }
   return result;
+}
+
+/// Converts string based on the transform function 'fn'. The unit of the conversion is
+/// a wchar_t (i.e. uint32_t) which is parsed from multi bytes using std::mbtowc().
+/// The transform function 'fn' accepts two parameters: the original wchar_t and a flag
+/// indicating whether it's the first character of a word.
+/// After the transformation, the wchar_t is converted back to bytes.
+static StringVal Utf8CaseConversion(FunctionContext* context, const StringVal& str,
+    uint32_t (*fn)(uint32_t, bool*)) {
+  // Usually the upper/lower cases have the same size in bytes. Here we add 4 bytes
+  // buffer in case of illegal unicodes.
+  int max_result_bytes = str.len + 4;
+  StringVal result(context, max_result_bytes);
+  wchar_t wc;
+  int wc_bytes;
+  bool word_start = true;
+  uint8_t* result_ptr = result.ptr;
+  for (int i = 0; i < str.len; i += wc_bytes) {
+    wc_bytes = std::mbtowc(&wc, reinterpret_cast<char*>(str.ptr + i), str.len - i);
+    VLOG_QUERY << "wc_bytes: " << wc_bytes << ", wc: " << wc;
+    if (wc_bytes == 0) {
+      //wc = 0;
+      wc_bytes = 1;
+    } else if (wc_bytes < 0) {
+      context->AddWarning("Illegal UTF_8 character in string");
+      // Replace it to the replacement character (U+FFFD)
+      wc = 0xFFFD;
+      // Jump to the next legal UTF-8 start byte.
+      wc_bytes = 1;
+      while (i + wc_bytes < str.len && !BitUtil::IsUtf8StartByte(str.ptr[i + wc_bytes])) {
+        wc_bytes++;
+      }
+    }
+    wc = fn(wc, &word_start);
+    result_ptr += std::wctomb(reinterpret_cast<char*>(result_ptr), wc);
+    if (result_ptr - result.ptr > max_result_bytes - 4) {
+      // Double the result buffer for overflow
+      max_result_bytes *= 2;
+      max_result_bytes = min<int>(StringVal::MAX_LENGTH,
+          static_cast<int>(BitUtil::RoundUpToPowerOfTwo(max_result_bytes)));
+      int offset = result_ptr - result.ptr;
+      if (UNLIKELY(!result.Resize(context, max_result_bytes) || context->has_error())) {
+        return StringVal::null();
+      }
+      result_ptr = result.ptr + offset;
+    }
+  }
+  result.len = result_ptr - result.ptr;
+  return result;
+}
+
+StringVal StringFunctions::LowerUtf8(FunctionContext* context, const StringVal& str) {
+  return Utf8CaseConversion(context, str,
+      [](uint32_t wide_char, bool* word_start) {
+        return std::towlower(wide_char);
+      });
+}
+
+StringVal StringFunctions::UpperUtf8(FunctionContext* context, const StringVal& str) {
+  return Utf8CaseConversion(context, str,
+      [](uint32_t wide_char, bool* word_start) {
+        return std::towupper(wide_char);
+      });
+}
+
+StringVal StringFunctions::InitCapUtf8(FunctionContext* context, const StringVal& str) {
+  return Utf8CaseConversion(context, str,
+      [](uint32_t wide_char, bool* word_start) {
+        if (UNLIKELY(iswspace(wide_char))) {
+          *word_start = true;
+          return wide_char;
+        }
+        uint32_t res = *word_start ? std::towupper(wide_char) : std::towlower(wide_char);
+        *word_start = false;
+        return res;
+      });
 }
 
 struct ReplaceContext {
