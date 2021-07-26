@@ -20,6 +20,26 @@ LOCATION '$$location_uri$$'
 TBLPROPERTIES ('external.table.purge'='TRUE')
 ====
 ---- CREATE_TABLE
+# Simple JSON table
+CREATE TABLE test1 (
+  id INT
+)
+STORED AS JSONFILE
+---- RESULTS-HIVE
+CREATE TABLE show_create_table_test_db.test1 (
+  id INT
+)
+STORED AS JSONFILE
+LOCATION '$$location_uri$$'
+---- RESULTS-HIVE-3
+CREATE EXTERNAL TABLE show_create_table_test_db.test1 (
+  id INT
+)
+STORED AS JSONFILE
+LOCATION '$$location_uri$$'
+TBLPROPERTIES ('external.table.purge'='TRUE')
+====
+---- CREATE_TABLE
 # simple table with all types
 CREATE TABLE test2 (
   year INT,
