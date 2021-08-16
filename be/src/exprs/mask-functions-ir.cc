@@ -17,6 +17,7 @@
 
 #include "exprs/mask-functions.h"
 
+#include <boost/locale/utf8_codecvt.hpp>
 #include <gutil/strings/substitute.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
@@ -43,9 +44,9 @@ const static int MASKED_MONTH_COMPONENT_VAL = 0;
 const static int MASKED_YEAR_COMPONENT_VAL = 1;
 const static int UNMASKED_VAL = -1;
 
-/// Mask the given char depending on its type. UNMASKED_VAL(-1) means keeping the
-/// original value.
-static inline uint8_t MaskTransform(uint8_t val, int masked_upper_char,
+/// Mask the given unicode code point depending on its range. UNMASKED_VAL(-1) means
+/// keeping the original value.
+static inline uint32_t MaskTransform(uint32_t val, int masked_upper_char,
     int masked_lower_char, int masked_digit_char, int masked_other_char) {
   if ('A' <= val && val <= 'Z') {
     if (masked_upper_char == UNMASKED_VAL) return val;
@@ -64,7 +65,7 @@ static inline uint8_t MaskTransform(uint8_t val, int masked_upper_char,
 }
 
 /// Mask the substring in range [start, end) of the given string value. Using rules in
-/// 'MaskTransform'.
+/// 'MaskTransform'. Indices are counted in bytes.
 static StringVal MaskSubStr(FunctionContext* ctx, const StringVal& val,
     int start, int end, int masked_upper_char, int masked_lower_char,
     int masked_digit_char, int masked_other_char) {
@@ -82,6 +83,79 @@ static StringVal MaskSubStr(FunctionContext* ctx, const StringVal& val,
   return result;
 }
 
+/// Mask the substring in range [start, end) of the given string value. Using rules in
+/// 'MaskTransform'. Indices are counted in UTF-8 code points.
+static StringVal MaskSubStrUtf8(FunctionContext* ctx, const StringVal& val,
+    int start, int end, int masked_upper_char, int masked_lower_char,
+    int masked_digit_char, int masked_other_char) {
+  DCHECK_GE(start, 0);
+  DCHECK_LT(start, end);
+  DCHECK_LE(end, val.len);
+  const char* p_start = reinterpret_cast<char*>(val.ptr);
+  const char* p_end = p_start + val.len;
+  boost::locale::utf8_codecvt<char>::state_type cvt_state =
+      boost::locale::utf8_codecvt<char>::initial_state(
+          boost::locale::generic_codecvt_base::to_unicode_state);
+  char buffer[4];
+  int char_cnt = 0;
+  const char* p = p_start;
+  // Skip leading 'start' code points.
+  while (char_cnt < start && p != p_end) {
+    boost::locale::utf8_codecvt<char>::to_unicode(cvt_state, p, p_end);
+    ++char_cnt;
+  }
+  int result_len = p - p_start;
+  int leading_bytes = result_len;
+  // Collect code points at range [start, end - 1).
+  vector<uint32_t> s;
+  while (char_cnt < end && p != p_end) {
+    uint32_t c = boost::locale::utf8_codecvt<char>::to_unicode(cvt_state, p, p_end);
+    if (c == boost::locale::utf::illegal || c == boost::locale::utf::incomplete) {
+      // TODO
+    }
+    c = MaskTransform(c, masked_upper_char, masked_lower_char, masked_digit_char, masked_other_char);
+    s.push_back(c);
+    uint32_t width = boost::locale::utf8_codecvt<char>::from_unicode(cvt_state, c, buffer, buffer + 4);
+    DCHECK(width != boost::locale::utf::illegal && width != boost::locale::utf::incomplete);
+    result_len += width;
+  }
+  result_len += p_end - p;
+  int tail_len = p_end - p;
+
+  VLOG_QUERY << "result_len=" << result_len;
+  StringVal result(ctx, result_len);
+  if (UNLIKELY(result.is_null)) return result;
+  Ubsan::MemCpy(result.ptr, val.ptr, leading_bytes);
+  char* ptr = reinterpret_cast<char*>(result.ptr) + leading_bytes;
+  p_end = reinterpret_cast<char*>(result.ptr) + result_len;
+  for (uint32_t c : s) {
+    uint32_t width = boost::locale::utf8_codecvt<char>::from_unicode(cvt_state, c, ptr, p_end);
+    DCHECK(width != boost::locale::utf::illegal && width != boost::locale::utf::incomplete);
+    ptr += width;
+    DCHECK(ptr <= p_end);
+  }
+  if (tail_len > 0) {
+    DCHECK(ptr < p_end);
+    Ubsan::MemCpy(ptr, result.ptr + result_len - tail_len, tail_len);
+  }
+  result.len = result_len;
+  return result;
+}
+
+static int Utf8CodePointLen(const StringVal& val) {
+  boost::locale::utf8_codecvt<char>::state_type cvt_state =
+      boost::locale::utf8_codecvt<char>::initial_state(
+          boost::locale::generic_codecvt_base::to_unicode_state);
+  const char* p = reinterpret_cast<char*>(val.ptr);
+  const char* p_end = p + val.len;
+  int char_cnt = 0;
+  while (p != p_end) {
+    boost::locale::utf8_codecvt<char>::to_unicode(cvt_state, p, p_end);
+    ++char_cnt;
+  }
+  return char_cnt;
+}
+
 /// Mask the given string except the first 'un_mask_char_count' chars. Ported from
 /// org.apache.hadoop.hive.ql.udf.generic.GenericUDFMaskShowFirstN.
 static inline StringVal MaskShowFirstNImpl(FunctionContext* ctx, const StringVal& val,
@@ -90,7 +164,11 @@ static inline StringVal MaskShowFirstNImpl(FunctionContext* ctx, const StringVal
   // To be consistent with Hive, negative char_count is treated as 0.
   if (un_mask_char_count < 0) un_mask_char_count = 0;
   if (val.is_null || val.len == 0 || un_mask_char_count >= val.len) return val;
-  return MaskSubStr(ctx, val, un_mask_char_count, val.len, masked_upper_char,
+  if (!ctx->impl()->GetConstFnAttr(FunctionContextImpl::UTF8_MODE)) {
+    return MaskSubStr(ctx, val, un_mask_char_count, val.len, masked_upper_char,
+        masked_lower_char, masked_digit_char, masked_other_char);
+  }
+  return MaskSubStrUtf8(ctx, val, un_mask_char_count, val.len, masked_upper_char,
       masked_lower_char, masked_digit_char, masked_other_char);
 }
 
@@ -102,8 +180,14 @@ static inline StringVal MaskShowLastNImpl(FunctionContext* ctx, const StringVal&
   // To be consistent with Hive, negative char_count is treated as 0.
   if (un_mask_char_count < 0) un_mask_char_count = 0;
   if (val.is_null || val.len == 0 || un_mask_char_count >= val.len) return val;
-  return MaskSubStr(ctx, val, 0, val.len - un_mask_char_count, masked_upper_char,
-      masked_lower_char, masked_digit_char, masked_other_char);
+  if (!ctx->impl()->GetConstFnAttr(FunctionContextImpl::UTF8_MODE)) {
+    return MaskSubStr(ctx, val, 0, val.len - un_mask_char_count, masked_upper_char,
+        masked_lower_char, masked_digit_char, masked_other_char);
+  }
+  int end = Utf8CodePointLen(val) - un_mask_char_count;
+  if (end <= 0) return val;
+  return MaskSubStr(ctx, val, 0, end, masked_upper_char, masked_lower_char,
+      masked_digit_char, masked_other_char);
 }
 
 /// Mask the first 'mask_char_count' chars of the given string. Ported from
@@ -113,7 +197,11 @@ static inline StringVal MaskFirstNImpl(FunctionContext* ctx, const StringVal& va
     int masked_digit_char, int masked_other_char) {
   if (mask_char_count <= 0 || val.is_null || val.len == 0) return val;
   if (mask_char_count > val.len) mask_char_count = val.len;
-  return MaskSubStr(ctx, val, 0, mask_char_count, masked_upper_char,
+  if (!ctx->impl()->GetConstFnAttr(FunctionContextImpl::UTF8_MODE)) {
+    return MaskSubStr(ctx, val, 0, mask_char_count, masked_upper_char, masked_lower_char,
+        masked_digit_char, masked_other_char);
+  }
+  return MaskSubStrUtf8(ctx, val, 0, mask_char_count, masked_upper_char,
       masked_lower_char, masked_digit_char, masked_other_char);
 }
 
@@ -124,8 +212,14 @@ static inline StringVal MaskLastNImpl(FunctionContext* ctx, const StringVal& val
     int masked_digit_char, int masked_other_char) {
   if (mask_char_count <= 0 || val.is_null || val.len == 0) return val;
   if (mask_char_count > val.len) mask_char_count = val.len;
-  return MaskSubStr(ctx, val, val.len - mask_char_count, val.len, masked_upper_char,
-      masked_lower_char, masked_digit_char, masked_other_char);
+  if (!ctx->impl()->GetConstFnAttr(FunctionContextImpl::UTF8_MODE)) {
+    return MaskSubStr(ctx, val, val.len - mask_char_count, val.len, masked_upper_char,
+        masked_lower_char, masked_digit_char, masked_other_char);
+  }
+  int start = Utf8CodePointLen(val) - mask_char_count;
+  if (start < 0) start = 0;
+  return MaskSubStrUtf8(ctx, val, start, val.len, masked_upper_char, masked_lower_char,
+      masked_digit_char, masked_other_char);
 }
 
 /// Mask the whole given string. Ported from
@@ -134,8 +228,12 @@ static inline StringVal MaskImpl(FunctionContext* ctx, const StringVal& val,
     int masked_upper_char, int masked_lower_char, int masked_digit_char,
     int masked_other_char) {
   if (val.is_null || val.len == 0) return val;
-  return MaskSubStr(ctx, val, 0, val.len, masked_upper_char,
-      masked_lower_char, masked_digit_char, masked_other_char);
+  if (!ctx->impl()->GetConstFnAttr(FunctionContextImpl::UTF8_MODE)) {
+    return MaskSubStr(ctx, val, 0, val.len, masked_upper_char,
+        masked_lower_char, masked_digit_char, masked_other_char);
+  }
+  return MaskSubStrUtf8(ctx, val, 0, val.len, masked_upper_char, masked_lower_char,
+      masked_digit_char, masked_other_char);
 }
 
 static inline int GetNumDigits(int64_t val) {
@@ -254,10 +352,27 @@ static DateVal MaskImpl(FunctionContext* ctx, const DateVal& val, int day_value,
   return DateValue(year, month, day).ToDateVal();
 }
 
-static inline uint8_t GetFirstChar(const StringVal& str, uint8_t default_value) {
+/// Gets the first character of 'str'. Returns 'default_value' if 'str' is empty.
+/// In UTF-8 mode, the first code point is returned.
+/// Otherwise, the first char is returned.
+static inline uint32_t GetFirstChar(FunctionContext* ctx, const StringVal& str,
+    uint32_t default_value) {
   // To be consistent with Hive, empty string is converted to default value. String with
   // length > 1 will only use its first char.
-  return str.len == 0 ? default_value : str.ptr[0];
+  if (str.len == 0) return default_value;
+  if (!ctx->impl()->GetConstFnAttr(FunctionContextImpl::UTF8_MODE)) return str.ptr[0];
+
+  boost::locale::utf8_codecvt<char>::state_type cvt_state =
+      boost::locale::utf8_codecvt<char>::initial_state(
+          boost::locale::generic_codecvt_base::to_unicode_state);
+  const char* p = reinterpret_cast<char*>(str.ptr);
+  uint32_t c = boost::locale::utf8_codecvt<char>::to_unicode(cvt_state, p, p + str.len);
+  if (c == boost::locale::utf::illegal) {
+    ctx->AddWarning("Illegal unicode found in the beginning of ");
+  } else if (c == boost::locale::utf::incomplete) {
+    ctx->AddWarning("Incomplete unicode found in the beginning of ");
+  }
+  return c;
 }
 
 /// Get digit (masked_number) from StringVal. Only accept digits or -1.
@@ -288,10 +403,10 @@ StringVal MaskFunctions::MaskShowFirstN(FunctionContext* ctx, const StringVal& v
     const IntVal& char_count, const StringVal& upper_char, const StringVal& lower_char,
     const StringVal& digit_char, const StringVal& other_char) {
   return MaskShowFirstNImpl(ctx, val, char_count.val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
-      GetFirstChar(other_char, MASKED_OTHER_CHAR));
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, other_char, MASKED_OTHER_CHAR));
 }
 StringVal MaskFunctions::MaskShowFirstN(FunctionContext* ctx, const StringVal& val,
     const IntVal& char_count, const StringVal& upper_char, const StringVal& lower_char,
@@ -305,9 +420,9 @@ StringVal MaskFunctions::MaskShowFirstN(FunctionContext* ctx, const StringVal& v
     const StringVal& digit_char, const IntVal& other_char,
     const StringVal& number_char) {
   return MaskShowFirstNImpl(ctx, val, char_count.val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
       other_char.val);
 }
 StringVal MaskFunctions::MaskShowFirstN(FunctionContext* ctx, const StringVal& val,
@@ -369,10 +484,10 @@ StringVal MaskFunctions::MaskShowLastN(FunctionContext* ctx, const StringVal& va
     const IntVal& char_count, const StringVal& upper_char, const StringVal& lower_char,
     const StringVal& digit_char, const StringVal& other_char) {
   return MaskShowLastNImpl(ctx, val, char_count.val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
-      GetFirstChar(other_char, MASKED_OTHER_CHAR));
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, other_char, MASKED_OTHER_CHAR));
 }
 StringVal MaskFunctions::MaskShowLastN(FunctionContext* ctx, const StringVal& val,
     const IntVal& char_count, const StringVal& upper_char, const StringVal& lower_char,
@@ -386,9 +501,9 @@ StringVal MaskFunctions::MaskShowLastN(FunctionContext* ctx, const StringVal& va
     const StringVal& digit_char, const IntVal& other_char,
     const StringVal& number_char) {
   return MaskShowLastNImpl(ctx, val, char_count.val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
       other_char.val);
 }
 StringVal MaskFunctions::MaskShowLastN(FunctionContext* ctx, const StringVal& val,
@@ -440,10 +555,10 @@ StringVal MaskFunctions::MaskFirstN(FunctionContext* ctx, const StringVal& val,
     const IntVal& char_count, const StringVal& upper_char, const StringVal& lower_char,
     const StringVal& digit_char, const StringVal& other_char) {
   return MaskFirstNImpl(ctx, val, char_count.val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
-      GetFirstChar(other_char, MASKED_OTHER_CHAR));
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, other_char, MASKED_OTHER_CHAR));
 }
 StringVal MaskFunctions::MaskFirstN(FunctionContext* ctx, const StringVal& val,
     const IntVal& char_count, const StringVal& upper_char, const StringVal& lower_char,
@@ -457,9 +572,9 @@ StringVal MaskFunctions::MaskFirstN(FunctionContext* ctx, const StringVal& val,
     const StringVal& digit_char, const IntVal& other_char,
     const StringVal& number_char) {
   return MaskFirstNImpl(ctx, val, char_count.val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
       other_char.val);
 }
 StringVal MaskFunctions::MaskFirstN(FunctionContext* ctx, const StringVal& val,
@@ -511,10 +626,10 @@ StringVal MaskFunctions::MaskLastN(FunctionContext* ctx, const StringVal& val,
     const IntVal& char_count, const StringVal& upper_char, const StringVal& lower_char,
     const StringVal& digit_char, const StringVal& other_char) {
   return MaskLastNImpl(ctx, val, char_count.val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
-      GetFirstChar(other_char, MASKED_OTHER_CHAR));
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, other_char, MASKED_OTHER_CHAR));
 }
 StringVal MaskFunctions::MaskLastN(FunctionContext* ctx, const StringVal& val,
     const IntVal& char_count, const StringVal& upper_char, const StringVal& lower_char,
@@ -528,9 +643,9 @@ StringVal MaskFunctions::MaskLastN(FunctionContext* ctx, const StringVal& val,
     const StringVal& digit_char, const IntVal& other_char,
     const StringVal& number_char) {
   return MaskLastNImpl(ctx, val, char_count.val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
       other_char.val);
 }
 StringVal MaskFunctions::MaskLastN(FunctionContext* ctx, const StringVal& val,
@@ -577,10 +692,10 @@ StringVal MaskFunctions::Mask(FunctionContext* ctx, const StringVal& val,
     const StringVal& upper_char, const StringVal& lower_char,
     const StringVal& digit_char, const StringVal& other_char) {
   return MaskImpl(ctx, val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
-      GetFirstChar(other_char, MASKED_OTHER_CHAR));
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, other_char, MASKED_OTHER_CHAR));
 }
 StringVal MaskFunctions::Mask(FunctionContext* ctx, const StringVal& val,
     const StringVal& upper_char, const StringVal& lower_char,
@@ -599,9 +714,9 @@ StringVal MaskFunctions::Mask(FunctionContext* ctx, const StringVal& val,
     const StringVal& digit_char, const IntVal& other_char,
     const StringVal& number_char) {
   return MaskImpl(ctx, val,
-      GetFirstChar(upper_char, MASKED_UPPERCASE),
-      GetFirstChar(lower_char, MASKED_LOWERCASE),
-      GetFirstChar(digit_char, MASKED_DIGIT),
+      GetFirstChar(ctx, upper_char, MASKED_UPPERCASE),
+      GetFirstChar(ctx, lower_char, MASKED_LOWERCASE),
+      GetFirstChar(ctx, digit_char, MASKED_DIGIT),
       other_char.val);
 }
 StringVal MaskFunctions::Mask(FunctionContext* ctx, const StringVal& val,
