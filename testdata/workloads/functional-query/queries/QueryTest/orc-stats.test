@@ -359,3 +359,11 @@ select count(*) from tpch_orc_def.lineitem where l_orderkey = 1609411;
 ---- RUNTIME_PROFILE
 aggregation(SUM, RowsRead): 13501
 ====
+---- QUERY
+# Test pushing down IN-list predicate
+select count(*) from functional_orc_def.alltypes where id in (0, 7299)
+---- RESULTS
+2
+---- RUNTIME_PROFILE
+aggregation(SUM, RowsRead): 620
+====

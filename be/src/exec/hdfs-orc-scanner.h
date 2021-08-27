@@ -318,6 +318,9 @@ class HdfsOrcScanner : public HdfsColumnarScanner {
   void SetSyntheticAcidFieldForOriginalFile(const SlotDescriptor* slot_desc,
       Tuple* template_tuple);
 
+  bool PrepareInListPredicates(const orc::Type* orc_col, SlotDescriptor* slot_desc,
+      ScalarExprEvaluator* eval, orc::SearchArgumentBuilder* sarg);
+
   /// Clones the min/max conjucts into min_max_conjunct_evals_, then builds ORC search
   /// arguments from the conjuncts. The search arguments will exist for the lifespan of
   /// the scanner and need not to be updated.
@@ -330,9 +333,9 @@ class HdfsOrcScanner : public HdfsColumnarScanner {
   template<typename T, typename U>
   orc::Literal GetOrcPrimitiveLiteral(orc::PredicateDataType predicate_type, void* val);
 
-  /// Returns the literal from the min/max conjucts, with the assumption that the
-  /// evaluator has exactly two children, where the second is a literal.
-  orc::Literal GetLiteralSearchArguments(ScalarExprEvaluator* eval,
+  /// Returns the literal specified by 'child_idx' from the min/max conjuct 'eval',
+  /// with the assumption that the specifit child is a literal.
+  orc::Literal GetLiteralSearchArguments(ScalarExprEvaluator* eval, int child_idx,
       const ColumnType& dst_type, orc::PredicateDataType* predicate_type);
 };
 

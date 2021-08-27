@@ -301,8 +301,8 @@ public class HdfsScanNode extends ScanNode {
   private int numFilesNoDiskIds_ = 0;
   private int numPartitionsNoDiskIds_ = 0;
 
-  // List of conjuncts for min/max values of parquet::Statistics, that are used to skip
-  // data when scanning Parquet files.
+  // List of conjuncts for min/max values of parquet/orc statistics, that are used to skip
+  // data when scanning Parquet/ORC files.
   private final List<Expr> minMaxConjuncts_ = new ArrayList<>();
 
   // Map from TupleDescriptor to list of PlanNode conjuncts that have been transformed
@@ -544,6 +544,26 @@ public class HdfsScanNode extends ScanNode {
     minMaxConjuncts_.add(statsPred);
   }
 
+  private void buildOrcInListStatsPredicate(Analyzer analyzer, SlotRef inputSlot,
+      InPredicate inputPred) {
+    List<Expr> children = inputPred.getChildren();
+    List<Expr> inList = Lists.newArrayListWithCapacity(children.size() - 1);
+    for (int i = 1; i < children.size(); ++i) {
+      Expr child = children.get(i);
+      // If any child is not a literal, then nothing can be done
+      if (!Expr.IS_LITERAL.apply(child)) return;
+      inList.add(child);
+    }
+    // Make a new slot descriptor, which adds it to the tuple descriptor.
+    SlotDescriptor slotDesc = analyzer.getDescTbl().copySlotDescriptor(minMaxTuple_,
+        inputSlot.getDesc());
+    SlotRef slot = new SlotRef(slotDesc);
+    InPredicate inPred = new InPredicate(slot, inList, inputPred.isNotIn());
+    inPred.analyzeNoThrow(analyzer);
+    // TODO: add another member for this or rename it.
+    minMaxConjuncts_.add(inPred);
+  }
+
   private void tryComputeBinaryMinMaxPredicate(Analyzer analyzer,
       BinaryPredicate binaryPred) {
     // We only support slot refs on the left hand side of the predicate, a rewriting
@@ -574,9 +594,15 @@ public class HdfsScanNode extends ScanNode {
       buildStatsPredicate(analyzer, slotRef, binaryPred, binaryPred.getOp());
     } else if (BinaryPredicate.IS_EQ_PREDICATE.apply(binaryPred)) {
       addMinMaxOriginalConjunct(slotDesc.getParent(), binaryPred);
-      // TODO: this could be optimized for boolean columns.
-      buildStatsPredicate(analyzer, slotRef, binaryPred, BinaryPredicate.Operator.LE);
-      buildStatsPredicate(analyzer, slotRef, binaryPred, BinaryPredicate.Operator.GE);
+      if (hasParquet(fileFormats_)) {
+        // TODO: this could be optimized for boolean columns.
+        buildStatsPredicate(analyzer, slotRef, binaryPred, BinaryPredicate.Operator.LE);
+        buildStatsPredicate(analyzer, slotRef, binaryPred, BinaryPredicate.Operator.GE);
+      }
+      if (fileFormats_.contains(HdfsFileFormat.ORC)) {
+        // We can push down EQ predicates to the ORC reader directly.
+        buildStatsPredicate(analyzer, slotRef, binaryPred, binaryPred.getOp());
+      }
     }
   }
 
@@ -589,13 +615,16 @@ public class HdfsScanNode extends ScanNode {
     Preconditions.checkState(slotDesc.isScanSlot());
     // Skip the slot ref if it refers to an array's "pos" field.
     if (slotDesc.isArrayPosRef()) return;
-    // TODO(IMPALA-10882): Push down Min-Max predicates of CHAR/VARCHAR to ORC reader
-    if (fileFormats_.contains(HdfsFileFormat.ORC) &&
-        (slotDesc.getType() == Type.CHAR || slotDesc.getType() == Type.VARCHAR)) {
-      return;
+    if (fileFormats_.contains(HdfsFileFormat.ORC)) {
+      // TODO(IMPALA-10882): Push down Min-Max predicates of CHAR/VARCHAR to ORC reader
+      if (slotDesc.getType() == Type.CHAR || slotDesc.getType() == Type.VARCHAR) {
+        return;
+      }
+      buildOrcInListStatsPredicate(analyzer, slotRef, inPred);
     }
     if (inPred.isNotIn()) return;
 
+    if (!hasParquet(fileFormats_)) return;
     List<Expr> children = inPred.getChildren();
     LiteralExpr min = null;
     LiteralExpr max = null;

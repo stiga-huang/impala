@@ -925,9 +925,10 @@ orc::Literal HdfsOrcScanner::GetOrcPrimitiveLiteral(
 }
 
 orc::Literal HdfsOrcScanner::GetLiteralSearchArguments(ScalarExprEvaluator* eval,
-    const ColumnType& dst_type, orc::PredicateDataType* predicate_type) {
-  DCHECK(eval->root().GetNumChildren() == 2);
-  ScalarExpr* literal_expr = eval->root().GetChild(1);
+    int child_idx, const ColumnType& dst_type, orc::PredicateDataType* predicate_type) {
+  DCHECK_GE(child_idx, 1);
+  DCHECK_LT(child_idx, eval->root().GetNumChildren());
+  ScalarExpr* literal_expr = eval->root().GetChild(child_idx);
   const ColumnType& type = literal_expr->type();
   DCHECK(literal_expr->IsLiteral());
   // Since we want to get a literal value, the second parameter below is not used.
@@ -1035,6 +1036,33 @@ orc::Literal HdfsOrcScanner::GetLiteralSearchArguments(ScalarExprEvaluator* eval
   }
 }
 
+bool HdfsOrcScanner::PrepareInListPredicates(const orc::Type* orc_col,
+    SlotDescriptor* slot_desc, ScalarExprEvaluator* eval,
+    orc::SearchArgumentBuilder* sarg) {
+  DCHECK(orc_col != nullptr);
+  std::vector<orc::Literal> in_list;
+  // Initialize 'predicate_type' to avoid clang-tidy warning.
+  orc::PredicateDataType predicate_type = orc::PredicateDataType::BOOLEAN;
+  for (int i = 1; i < eval->root().children().size(); ++i) {
+    // ORC reader only supports pushing down predicates that constant parts are literal.
+    // We could get non-literal expr if expr rewrites are disabled.
+    if (!eval->root().GetChild(i)->IsLiteral()) return false;
+    in_list.emplace_back(GetLiteralSearchArguments(
+        eval, i, slot_desc->type(), &predicate_type));
+  }
+  // The ORC library requires IN-list has at least 2 literals. Converting to EQUALS
+  // when there are one.
+  if (in_list.size() == 1) {
+    sarg->equals(orc_col->getColumnId(), predicate_type, in_list[0]);
+  } else if (in_list.size() > 1) {
+    sarg->in(orc_col->getColumnId(), predicate_type, in_list);
+  } else {
+    DCHECK(false) << "Empty IN-list should cause syntax error";
+    return false;
+  }
+  return true;
+}
+
 Status HdfsOrcScanner::PrepareSearchArguments() {
   if (!state_->query_options().orc_read_statistics) return Status::OK();
 
@@ -1085,9 +1113,13 @@ Status HdfsOrcScanner::PrepareSearchArguments() {
     if (node->getKind() == orc::CHAR || node->getKind() == orc::VARCHAR) continue;
 
     const string& fn_name = eval->root().function_name();
+    if (fn_name == "in_iterate" || fn_name == "in_set_lookup") {
+      sargs_supported |= PrepareInListPredicates(node, slot_desc, eval, sarg.get());
+      continue;
+    }
     orc::PredicateDataType predicate_type;
-    orc::Literal literal =
-        GetLiteralSearchArguments(eval, slot_desc->type(), &predicate_type);
+    orc::Literal literal = GetLiteralSearchArguments(eval, /*child_idx*/1,
+        slot_desc->type(), &predicate_type);
     if (literal.isNull()) {
       VLOG_QUERY << "Failed to push down predicate " << eval->root().DebugString();
       continue;
@@ -1105,6 +1137,8 @@ Status HdfsOrcScanner::PrepareSearchArguments() {
       sarg->startNot()
           .lessThan(node->getColumnId(), predicate_type, literal)
           .end();
+    } else if (fn_name == "eq") {
+      sarg->equals(node->getColumnId(), predicate_type, literal);
     } else {
       DCHECK(false) << "Invalid predicate: " << fn_name;
       continue;
