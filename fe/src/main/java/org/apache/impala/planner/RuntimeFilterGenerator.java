@@ -888,7 +888,7 @@ public final class RuntimeFilterGenerator {
    *    scan node.
    * 3. Only Hdfs and Kudu scan nodes are supported:
    *     a. If the target is an HdfsScanNode, the filter must be type BLOOM for non
-   *        Parquet tables, or type BLOOM and/or MIN_MAX for Parquet tables.
+   *        Parquet/ORC tables, or type BLOOM and/or MIN_MAX for Parquet/ORC tables.
    *     b. If the target is a KuduScanNode, the filter could be type MIN_MAX, and/or
    *        BLOOM, the target must be a slot ref on a column, and the comp op cannot
    *        be 'not distinct'.
@@ -941,8 +941,8 @@ public final class RuntimeFilterGenerator {
           }
           if (!disable_overlap_filter) {
             // Try to compute an overlap predicate for the filter. This predicate will be
-            // used to filter out partitions, or row groups, pages or rows in Parquet data
-            // files.
+            // used to filter out partitions, RowGroups/Pages/Rows in Parquet data
+            // files, or Stripes/RowGroups/Rows in ORC data files.
             if (!((HdfsScanNode) scanNode)
                      .tryToComputeOverlapPredicate(
                          analyzer, filter, targetExpr, isBoundByPartitionColumns)) {

@@ -33,16 +33,13 @@ import java.util.stream.Collectors;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.impala.analysis.Analyzer;
-import org.apache.impala.analysis.AlterTableSortByStmt;
 import org.apache.impala.analysis.BinaryPredicate;
-import org.apache.impala.analysis.CompoundPredicate;
 import org.apache.impala.analysis.DescriptorTable;
 import org.apache.impala.analysis.Expr;
 import org.apache.impala.analysis.InPredicate;
 import org.apache.impala.analysis.IsNotEmptyPredicate;
 import org.apache.impala.analysis.LiteralExpr;
 import org.apache.impala.analysis.MultiAggregateInfo;
-import org.apache.impala.analysis.Path;
 import org.apache.impala.analysis.SlotDescriptor;
 import org.apache.impala.analysis.SlotId;
 import org.apache.impala.analysis.SlotRef;
@@ -59,11 +56,9 @@ import org.apache.impala.catalog.HdfsCompression;
 import org.apache.impala.catalog.HdfsFileFormat;
 import org.apache.impala.catalog.HdfsPartition.FileBlock;
 import org.apache.impala.catalog.HdfsPartition.FileDescriptor;
-import org.apache.impala.catalog.HdfsTable;
 import org.apache.impala.catalog.PrimitiveType;
 import org.apache.impala.catalog.ScalarType;
 import org.apache.impala.catalog.Type;
-import org.apache.impala.common.AnalysisException;
 import org.apache.impala.common.FileSystemUtil;
 import org.apache.impala.common.ImpalaException;
 import org.apache.impala.common.ImpalaRuntimeException;
@@ -103,7 +98,6 @@ import com.google.common.base.Joiner;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.MoreObjects.ToStringHelper;
 import com.google.common.base.Preconditions;
-import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
@@ -232,8 +226,8 @@ public class HdfsScanNode extends ScanNode {
   // File formats scanned. Set in computeScanRangeLocations().
   private Set<HdfsFileFormat> fileFormats_;
 
-  // Whether all formats scanned are Parquet. Set in computeScanRangeLocations().
-  private boolean allParquet_ = false;
+  // Whether all formats scanned are Parquet/ORC. Set in computeScanRangeLocations().
+  private boolean onlyParquetOrc_ = false;
 
   // Number of bytes in the largest scan range (i.e. hdfs split). Set in
   // computeScanRangeLocations().
@@ -713,7 +707,7 @@ public class HdfsScanNode extends ScanNode {
    * Init the necessary data structures prior to the detection of overlap predicates.
    */
   public void initOverlapPredicate(Analyzer analyzer) {
-    if (!allParquet_) return;
+    if (!onlyParquetOrc_) return;
     Preconditions.checkNotNull(minMaxTuple_);
     // Allow the tuple to accept new slots.
     minMaxTuple_.resetHasMemoryLayout();
@@ -815,7 +809,7 @@ public class HdfsScanNode extends ScanNode {
       Expr targetExpr, boolean isBoundByPartitionColumns) {
     // This optimization is only valid for min/max filters and Parquet tables.
     if (filter.getType() != TRuntimeFilterType.MIN_MAX) return false;
-    if (!allParquet_) return false;
+    if (!onlyParquetOrc_) return false;
 
     // The unwrapped targetExpr should refer to a column in the scan node.
     SlotRef slotRefInScan = targetExpr.unwrapSlotRef(true);
@@ -877,7 +871,7 @@ public class HdfsScanNode extends ScanNode {
 
   // Finalize the necessary data structures.
   public void finalizeOverlapPredicate() {
-    if (!allParquet_) return;
+    if (!onlyParquetOrc_) return;
     // Recompute the memory layout for the min/max tuple.
     minMaxTuple_.computeMemLayout();
   }
@@ -1078,7 +1072,7 @@ public class HdfsScanNode extends ScanNode {
     largestScanRangeBytes_ = 0;
     maxScanRangeNumRows_ = -1;
     fileFormats_ = new HashSet<>();
-    boolean allParquet = (partitions_.size() > 0) ? true : false;
+    boolean onlyParquetOrc = (partitions_.size() > 0);
     long simpleLimitNumRows = 0; // only used for the simple limit case
     boolean isSimpleLimit = sampleParams_ == null &&
         (analyzer.getQueryCtx().client_request.getQuery_options()
@@ -1128,8 +1122,9 @@ public class HdfsScanNode extends ScanNode {
 
       analyzer.getDescTbl().addReferencedPartition(tbl_, partition.getId());
       fileFormats_.add(partition.getFileFormat());
-      if (!partition.getFileFormat().isParquetBased()) {
-        allParquet = false;
+      if (!partition.getFileFormat().isParquetBased()
+          && partition.getFileFormat() != HdfsFileFormat.ORC) {
+        onlyParquetOrc = false;
       }
       Preconditions.checkState(partition.getId() >= 0);
 
@@ -1193,7 +1188,7 @@ public class HdfsScanNode extends ScanNode {
         break;
       }
     }
-    allParquet_ = allParquet;
+    onlyParquetOrc_ = onlyParquetOrc;
     if (totalFilesPerFs_.isEmpty() || sumValues(totalFilesPerFs_) == 0) {
       maxScanRangeNumRows_ = 0;
     } else {
@@ -2269,7 +2264,7 @@ public class HdfsScanNode extends ScanNode {
    * Sort filters in runtimeFilters_: min/max first followed by bloom.
    */
   public void arrangeRuntimefiltersForParquet() {
-    if (allParquet_) {
+    if (onlyParquetOrc_) {
       Collections.sort(runtimeFilters_, new Comparator<RuntimeFilter>() {
         @Override
         public int compare(RuntimeFilter a, RuntimeFilter b) {
