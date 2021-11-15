@@ -3184,6 +3184,7 @@ public class CatalogOpExecutor {
     }
     Preconditions.checkState(params.getColumns().size() > 0,
         "Empty column list given as argument to Catalog.createTable");
+    MetastoreShim.setTableLocation(catalog_.getDb(tbl.getDbName()), tbl);
     return createTable(tbl, params.if_not_exists, params.getCache_op(),
         params.server_name, params.getPrimary_keys(), params.getForeign_keys(),
         wantMinimalResult, response);
@@ -3729,6 +3730,7 @@ public class CatalogOpExecutor {
     tbl.putToParameters(StatsSetupConst.ROW_COUNT, "-1");
     setDefaultTableCapabilities(tbl);
     LOG.trace(String.format("Creating table %s LIKE %s", tblName, srcTblName));
+    MetastoreShim.setTableLocation(catalog_.getDb(tbl.getDbName()), tbl);
     createTable(tbl, params.if_not_exists, null, params.server_name, null, null,
         wantMinimalResult, response);
   }
