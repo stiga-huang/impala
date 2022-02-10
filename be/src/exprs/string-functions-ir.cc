@@ -354,18 +354,23 @@ StringVal StringFunctions::InitCapAscii(FunctionContext* context, const StringVa
 static StringVal Utf8CaseConversion(FunctionContext* context, const StringVal& str,
     uint32_t (*fn)(uint32_t, bool*)) {
   // Usually the upper/lower cases have the same size in bytes. Here we add 4 bytes
-  // buffer in case of illegal unicodes.
+  // buffer in case of illegal Unicodes.
   int max_result_bytes = str.len + 4;
   StringVal result(context, max_result_bytes);
   wchar_t wc;
   int wc_bytes;
   bool word_start = true;
   uint8_t* result_ptr = result.ptr;
+  std::mbstate_t wc_state = {0};
+  std::mbstate_t mb_state = {0};
   for (int i = 0; i < str.len; i += wc_bytes) {
-    wc_bytes = std::mbtowc(&wc, reinterpret_cast<char*>(str.ptr + i), str.len - i);
-    VLOG_QUERY << "wc_bytes: " << wc_bytes << ", wc: " << wc;
+    // std::mbtowc converts a multibyte sequence to a wide character. It's not
+    // thread-safe. Here we use std::mbrtowc instead.
+    wc_bytes = std::mbrtowc(&wc, reinterpret_cast<char*>(str.ptr + i), str.len - i,
+        &wc_state);
     if (wc_bytes == 0) {
-      //wc = 0;
+      // std::mbtowc returns 0 when hitting '\0'
+      wc = 0;
       wc_bytes = 1;
     } else if (wc_bytes < 0) {
       context->AddWarning("Illegal UTF_8 character in string");
@@ -378,7 +383,9 @@ static StringVal Utf8CaseConversion(FunctionContext* context, const StringVal& s
       }
     }
     wc = fn(wc, &word_start);
-    result_ptr += std::wctomb(reinterpret_cast<char*>(result_ptr), wc);
+    // std::wctomb converts a wide character to a multibyte sequence. It's not
+    // thread-safe. Here we use std::wcrtomb instead.
+    result_ptr += std::wcrtomb(reinterpret_cast<char*>(result_ptr), wc, &mb_state);
     if (result_ptr - result.ptr > max_result_bytes - 4) {
       // Double the result buffer for overflow
       max_result_bytes *= 2;
