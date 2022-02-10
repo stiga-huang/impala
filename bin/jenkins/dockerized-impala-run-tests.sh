@@ -95,6 +95,7 @@ export BE_TEST=false
 # to make them start up dockerised clusters and will probably make more assumptions
 # about the cluster being tested.
 export CLUSTER_TEST=false
+export EE_TEST_FILES=query_test/test_utf8_strings.py
 RET_CODE=0
 if ! ./bin/run-all-tests.sh; then
   RET_CODE=1
