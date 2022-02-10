@@ -361,13 +361,13 @@ static StringVal Utf8CaseConversion(FunctionContext* context, const StringVal& s
   int wc_bytes;
   bool word_start = true;
   uint8_t* result_ptr = result.ptr;
-  std::mbstate_t wc_state = {0};
-  std::mbstate_t mb_state = {0};
   for (int i = 0; i < str.len; i += wc_bytes) {
     // std::mbtowc converts a multibyte sequence to a wide character. It's not
     // thread-safe. Here we use std::mbrtowc instead.
+    std::mbstate_t wc_state = {0};
     wc_bytes = std::mbrtowc(&wc, reinterpret_cast<char*>(str.ptr + i), str.len - i,
         &wc_state);
+    VLOG_QUERY << "i: " << i << ", wc: " << wc << ", wc_bytes: " << wc_bytes;
     if (wc_bytes == 0) {
       // std::mbtowc returns 0 when hitting '\0'
       wc = 0;
@@ -385,6 +385,7 @@ static StringVal Utf8CaseConversion(FunctionContext* context, const StringVal& s
     wc = fn(wc, &word_start);
     // std::wctomb converts a wide character to a multibyte sequence. It's not
     // thread-safe. Here we use std::wcrtomb instead.
+    std::mbstate_t mb_state = {0};
     result_ptr += std::wcrtomb(reinterpret_cast<char*>(result_ptr), wc, &mb_state);
     if (result_ptr - result.ptr > max_result_bytes - 4) {
       // Double the result buffer for overflow
