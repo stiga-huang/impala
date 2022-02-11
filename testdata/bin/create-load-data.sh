@@ -649,24 +649,6 @@ run-step-wait-all
 run-step "Running custom post-load steps" custom-post-load-steps.log \
     custom-post-load-steps
 
-if [ "${TARGET_FILESYSTEM}" = "hdfs" ]; then
-  # Caching tables in s3 returns an IllegalArgumentException, see IMPALA-1714
-  run-step "Caching test tables" cache-test-tables.log cache-test-tables
-
-  # TODO: Modify the .sql file that creates the table to take an alternative location into
-  # account.
-  run-step "Loading external data sources" load-ext-data-source.log \
-      copy-and-load-ext-data-source
-
-  run-step "Creating internal HBase table" create-internal-hbase-table.log \
-      create-internal-hbase-table
-
-  run-step "Checking HDFS health" check-hdfs-health.log check-hdfs-health
-
-  # Saving the list of created files can help in debugging missing files.
-  run-step "Logging created files" created-files.log hdfs dfs -ls -R /test-warehouse
-fi
-
 # IMPALA-8346: this step only applies if the cluster is the local minicluster
 if [[ -z "$REMOTE_LOAD" ]]; then
   run-step "Creating tpcds testcase data" create-tpcds-testcase-data.log \
