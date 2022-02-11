@@ -346,6 +346,23 @@ StringVal StringFunctions::InitCapAscii(FunctionContext* context, const StringVa
   return result;
 }
 
+/// Reports the error in parsing multibyte characters with leading bytes and current
+/// locale. Used in Utf8CaseConversion().
+static void ReportErrorBytes(FunctionContext* context, const StringVal& str,
+    int current_idx) {
+  DCHECK_NOTNULL(str.ptr);
+  DCHECK_LT(current_idx, str.len);
+  stringstream ss;
+  ss << "[" << str.ptr[current_idx];
+  for (int k = 1; k < 4 && current_idx + k < str.len; ++k) {
+    ss << ", " << str.ptr[current_idx + k];
+  }
+  ss << "]";
+  context->AddWarning(Substitute(
+      "Illegal multi-byte character in string. Leading bytes: $0. Current locale: $1",
+      ss.str(), std::locale("").name()).c_str());
+}
+
 /// Converts string based on the transform function 'fn'. The unit of the conversion is
 /// a wchar_t (i.e. uint32_t) which is parsed from multi bytes using std::mbtowc().
 /// The transform function 'fn' accepts two parameters: the original wchar_t and a flag
@@ -363,30 +380,41 @@ static StringVal Utf8CaseConversion(FunctionContext* context, const StringVal& s
   uint8_t* result_ptr = result.ptr;
   for (int i = 0; i < str.len; i += wc_bytes) {
     // std::mbtowc converts a multibyte sequence to a wide character. It's not
-    // thread-safe. Here we use std::mbrtowc instead.
+    // thread safe. Here we use std::mbrtowc instead.
     std::mbstate_t wc_state = {0};
     wc_bytes = std::mbrtowc(&wc, reinterpret_cast<char*>(str.ptr + i), str.len - i,
         &wc_state);
     VLOG_QUERY << "i: " << i << ", wc: " << wc << ", wc_bytes: " << wc_bytes;
+    bool needs_conversion = true;
     if (wc_bytes == 0) {
-      // std::mbtowc returns 0 when hitting '\0'
+      // std::mbtowc returns 0 when hitting '\0'.
       wc = 0;
       wc_bytes = 1;
     } else if (wc_bytes < 0) {
-      context->AddWarning("Illegal UTF_8 character in string");
+      ReportErrorBytes(context, str, i);
       // Replace it to the replacement character (U+FFFD)
       wc = 0xFFFD;
+      needs_conversion = false;
       // Jump to the next legal UTF-8 start byte.
       wc_bytes = 1;
       while (i + wc_bytes < str.len && !BitUtil::IsUtf8StartByte(str.ptr[i + wc_bytes])) {
         wc_bytes++;
       }
     }
-    wc = fn(wc, &word_start);
+    if (needs_conversion) wc = fn(wc, &word_start);
     // std::wctomb converts a wide character to a multibyte sequence. It's not
-    // thread-safe. Here we use std::wcrtomb instead.
+    // thread safe. Here we use std::wcrtomb instead.
     std::mbstate_t mb_state = {0};
-    result_ptr += std::wcrtomb(reinterpret_cast<char*>(result_ptr), wc, &mb_state);
+    int res_bytes = std::wcrtomb(reinterpret_cast<char*>(result_ptr), wc, &mb_state);
+    if (res_bytes <= 0) {
+      if (needs_conversion) {
+        context->AddWarning(Substitute(
+            "Ignored illegal wide character in results: $0. Current locale: $1",
+            wc, std::locale("").name()).c_str());
+      }
+      continue;
+    }
+    result_ptr += res_bytes;
     if (result_ptr - result.ptr > max_result_bytes - 4) {
       // Double the result buffer for overflow
       max_result_bytes *= 2;
