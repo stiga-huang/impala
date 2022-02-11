@@ -89,6 +89,7 @@ export MAX_PYTEST_FAILURES=0
 export NUM_CONCURRENT_TESTS=$(nproc)
 # Frontend tests fail because of localhost hardcoded everywhere
 export FE_TEST=false
+export JDBC_TEST=false
 # No need to run backend tests - they are identical with non-docker build.
 export BE_TEST=false
 # TODO: custom cluster tests may provide some useful coverage but require work
