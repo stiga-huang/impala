@@ -350,10 +350,9 @@ StringVal StringFunctions::InitCapAscii(FunctionContext* context, const StringVa
 /// locale. Used in Utf8CaseConversion().
 static void ReportErrorBytes(FunctionContext* context, const StringVal& str,
     int current_idx) {
-  DCHECK_NOTNULL(str.ptr);
   DCHECK_LT(current_idx, str.len);
   stringstream ss;
-  ss << "[" << str.ptr[current_idx];
+  ss << "[" << DCHECK_NOTNULL(str.ptr)[current_idx];
   for (int k = 1; k < 4 && current_idx + k < str.len; ++k) {
     ss << ", " << str.ptr[current_idx + k];
   }
