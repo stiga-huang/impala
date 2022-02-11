@@ -66,4 +66,6 @@ fi
 # Set ulimit core file size 0.
 ulimit -c 0
 
+export LC_ALL=C.UTF-8
+
 exec "$@"
