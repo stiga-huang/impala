@@ -234,6 +234,7 @@ function load-data {
   EXPLORATION_STRATEGY=${2:-"core"}
   TABLE_FORMATS=${3:-}
   FORCE_LOAD=${4:-}
+  TABLE_NAMES=${5:-"utf8_str_tiny"}
 
   MSG="Loading workload '$WORKLOAD'"
   ARGS=("--workloads $WORKLOAD")
@@ -242,6 +243,10 @@ function load-data {
   if [ $TABLE_FORMATS ]; then
     MSG+=" in table formats '$TABLE_FORMATS'"
     ARGS+=("--table_formats $TABLE_FORMATS")
+  fi
+  if [ $TABLE_NAMES ]; then
+    MSG+=" for table names '$TABLE_NAMES'"
+    ARGS+=("--table_names $TABLE_NAMES")
   fi
   if [ $LOAD_DATA_ARGS ]; then
     ARGS+=("$LOAD_DATA_ARGS")
@@ -626,41 +631,18 @@ if [ $SKIP_METADATA_LOAD -eq 0 ]; then
   # finish while functional-query is running.
   run-step-backgroundable "Loading functional-query data" load-functional-query.log \
       load-data "functional-query" "exhaustive"
-  run-step-backgroundable "Loading TPC-H data" load-tpch.log load-data "tpch" "core"
-  run-step-backgroundable "Loading TPC-DS data" load-tpcds.log load-data "tpcds" "core"
   run-step-wait-all
   # Load tpch nested data.
   # TODO: Hacky and introduces more complexity into the system, but it is expedient.
   if [[ -n "$CM_HOST" ]]; then
     LOAD_NESTED_ARGS="--cm-host $CM_HOST"
   fi
-  run-step "Loading nested parquet data" load-nested.log \
-    ${IMPALA_HOME}/testdata/bin/load_nested.py \
-    -t tpch_nested_parquet -f parquet/none ${LOAD_NESTED_ARGS:-}
-  run-step "Loading nested orc data" load-nested.log \
-    ${IMPALA_HOME}/testdata/bin/load_nested.py \
-    -t tpch_nested_orc_def -f orc/def ${LOAD_NESTED_ARGS:-}
-  run-step "Loading auxiliary workloads" load-aux-workloads.log load-aux-workloads
-  run-step "Loading dependent tables" copy-and-load-dependent-tables.log \
-      copy-and-load-dependent-tables
-  run-step "Loading custom data" load-custom-data.log load-custom-data
-  run-step "Creating many block table" create-table-many-blocks.log \
-      ${IMPALA_HOME}/testdata/bin/create-table-many-blocks.sh -p 1234 -b 1
 elif [ "${TARGET_FILESYSTEM}" = "hdfs" ];  then
   echo "Skipped loading the metadata."
   run-step "Loading HBase data only" load-hbase-only.log \
       load-data "functional-query" "core" "hbase/none"
 fi
 
-if [[ $SKIP_METADATA_LOAD -eq 1 ]]; then
-  # Tests depend on the kudu data being clean, so load the data from scratch.
-  # This is only necessary if this is not a full dataload, because a full dataload
-  # already loads Kudu functional and TPC-H tables from scratch.
-  run-step-backgroundable "Loading Kudu functional" load-kudu.log \
-        load-data "functional-query" "core" "kudu/none/none" force
-  run-step-backgroundable "Loading Kudu TPCH" load-kudu-tpch.log \
-        load-data "tpch" "core" "kudu/none/none" force
-fi
 run-step-backgroundable "Loading Hive UDFs" build-and-copy-hive-udfs.log \
     build-and-copy-hive-udfs
 run-step-wait-all
@@ -684,11 +666,6 @@ if [ "${TARGET_FILESYSTEM}" = "hdfs" ]; then
   # Saving the list of created files can help in debugging missing files.
   run-step "Logging created files" created-files.log hdfs dfs -ls -R /test-warehouse
 fi
-
-# TODO: Investigate why all stats are not preserved. Theoretically, we only need to
-# recompute stats for HBase.
-run-step "Computing table stats" compute-table-stats.log \
-    ${IMPALA_HOME}/testdata/bin/compute-table-stats.sh
 
 # IMPALA-8346: this step only applies if the cluster is the local minicluster
 if [[ -z "$REMOTE_LOAD" ]]; then
