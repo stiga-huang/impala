@@ -352,9 +352,9 @@ static void ReportErrorBytes(FunctionContext* context, const StringVal& str,
     int current_idx) {
   DCHECK_LT(current_idx, str.len);
   stringstream ss;
-  ss << "[" << DCHECK_NOTNULL(str.ptr)[current_idx];
+  ss << "[0x" << std::hex << (int)DCHECK_NOTNULL(str.ptr)[current_idx];
   for (int k = 1; k < 4 && current_idx + k < str.len; ++k) {
-    ss << ", " << str.ptr[current_idx + k];
+    ss << ", 0x" << std::hex << (int)str.ptr[current_idx + k];
   }
   ss << "]";
   context->AddWarning(Substitute(
