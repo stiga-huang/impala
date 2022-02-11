@@ -649,12 +649,6 @@ run-step-wait-all
 run-step "Running custom post-load steps" custom-post-load-steps.log \
     custom-post-load-steps
 
-# IMPALA-8346: this step only applies if the cluster is the local minicluster
-if [[ -z "$REMOTE_LOAD" ]]; then
-  run-step "Creating tpcds testcase data" create-tpcds-testcase-data.log \
-      ${IMPALA_HOME}/testdata/bin/create-tpcds-testcase-files.sh
-fi
-
 if [[ $SKIP_RANGER -eq 0 ]]; then
   run-step "Setting up Ranger" setup-ranger.log setup-ranger
 fi
