@@ -260,17 +260,18 @@ Status OrcStringColumnReader<ENCODED, SLOT_TYPE>::UpdateInputBatch(
   batch_ = static_cast<orc::StringVectorBatch*>(orc_batch);
   if (orc_batch == nullptr) return Status::OK();
   // We update the blob of a non-encoded batch every time, but since the dictionary blob
-  // is the same for the stripe, we only reset it for every new stripe.
-  // Note that this is possible since the encoding should be the same for every batch
-  // through the whole stripe.
-  if(!orc_batch->isEncoded) {
+  // is the same for the stripe, we only update it for the first batch.
+  // Note that the life cycle of this reader matches the processing of a stripe.
+  // New readers will be created for new stripes.
+  if (!ENCODED) {
+    DCHECK(!orc_batch->isEncoded);
     DCHECK(batch_ == dynamic_cast<orc::StringVectorBatch*>(orc_batch));
     return InitBlob(&batch_->blob, this->scanner_->data_batch_pool_.get());
   }
   DCHECK(static_cast<orc::EncodedStringVectorBatch*>(batch_) ==
       dynamic_cast<orc::EncodedStringVectorBatch*>(orc_batch));
-  if (last_stripe_idx_ != this->scanner_->stripe_idx_) {
-    last_stripe_idx_ = this->scanner_->stripe_idx_;
+  if (first_batch_) {
+    first_batch_ = false;
     auto current_batch = static_cast<orc::EncodedStringVectorBatch*>(batch_);
     return InitBlob(&current_batch->dictionary->dictionaryBlob,
         this->scanner_->dictionary_pool_.get());

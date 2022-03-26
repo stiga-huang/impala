@@ -316,9 +316,8 @@ class OrcStringColumnReader :
   // by the ORC lib.
   char* blob_ = nullptr;
 
-  // We cache the last stripe so we know when we have to update the blob (in case of
-  // dictionary encoding).
-  int last_stripe_idx_ = -1;
+  // In case of dictionary encoding, we just need to update the blob for the first batch.
+  bool first_batch_ = true;
 
   /// Initializes the blob if it has not been already in the current batch.
   /// Unfortunately, this cannot be done in UpdateInputBatch, since we do not have
