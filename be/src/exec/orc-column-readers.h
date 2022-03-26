@@ -80,6 +80,9 @@ class OrcColumnReader {
   static OrcColumnReader* Create(const orc::Type* node, const SlotDescriptor* slot_desc,
       HdfsOrcScanner* scanner);
 
+  static bool IsDictionaryEncodingInCurrStripe(const orc::Type* node,
+      const HdfsOrcScanner* scanner);
+
   /// Base constructor for all types of readers that hold a SlotDescriptor (direct
   /// readers). Primitive column readers will materialize values into the slot. STRUCT
   /// column readers will delegate the slot materialization to its children. Collection
@@ -135,18 +138,10 @@ class OrcColumnReader {
   friend class OrcCollectionReader;
 
   /// Returns the ORC type column id corresponding to the given slot descriptor.
-  uint64_t GetColId(const SlotDescriptor* desc) const {
-    auto it = scanner_->slot_to_col_id_.find(desc);
-    DCHECK(it != scanner_->slot_to_col_id_.end());
-    return it->second;
-  }
+  uint64_t GetColId(const SlotDescriptor* desc) const;
 
   /// Returns the ORC type column id corresponding to the given tuple descriptor.
-  uint64_t GetColId(const TupleDescriptor* desc) const {
-    auto it = scanner_->tuple_to_col_id_.find(desc);
-    DCHECK(it != scanner_->tuple_to_col_id_.end());
-    return it->second;
-  }
+  uint64_t GetColId(const TupleDescriptor* desc) const;
 
   /// Convenient field for debug. We can't keep the pointer of orc::Type since they'll be
   /// destroyed after orc::RowReader was released. Only keep the id orc::Type here.
@@ -185,24 +180,7 @@ class OrcBatchedReader : public OrcColumnReader {
       : OrcColumnReader(node, slot_desc, scanner) {}
 
   Status ReadValueBatch(int row_idx, ScratchTupleBatch* scratch_batch, MemPool* pool,
-      int scratch_batch_idx) override WARN_UNUSED_RESULT {
-    Final* final = this->GetFinal();
-    int num_to_read = std::min<int>(scratch_batch->capacity - scratch_batch_idx,
-        final->NumElements() - row_idx);
-    DCHECK_LE(row_idx + num_to_read, final->NumElements());
-    for (int i = 0; i < num_to_read; ++i) {
-      int scratch_batch_pos = i + scratch_batch_idx;
-      uint8_t* next_tuple = scratch_batch->tuple_mem +
-          scratch_batch_pos * OrcColumnReader::scanner_->tuple_byte_size();
-      Tuple* tuple = reinterpret_cast<Tuple*>(next_tuple);
-      // The compiler will devirtualize the call to ReadValue() if it is marked 'final' in
-      // the 'Final' class. This way we can reduce the number of virtual function calls
-      // to improve performance.
-      RETURN_IF_ERROR(final->ReadValue(row_idx + i, tuple, pool));
-    }
-    scratch_batch->num_tuples = scratch_batch_idx + num_to_read;
-    return Status::OK();
-  }
+      int scratch_batch_idx) override WARN_UNUSED_RESULT;
 
   Final* GetFinal() { return static_cast<Final*>(this); }
   const Final* GetFinal() const { return static_cast<const Final*>(this); }
@@ -316,7 +294,9 @@ class OrcDoubleColumnReader : public OrcPrimitiveColumnReader<OrcDoubleColumnRea
   orc::DoubleVectorBatch* batch_;
 };
 
-class OrcStringColumnReader : public OrcPrimitiveColumnReader<OrcStringColumnReader> {
+template<bool ENCODED, PrimitiveType SLOT_TYPE>
+class OrcStringColumnReader :
+    public OrcPrimitiveColumnReader<OrcStringColumnReader<ENCODED, SLOT_TYPE>> {
  public:
   OrcStringColumnReader(const orc::Type* node, const SlotDescriptor* slot_desc,
       HdfsOrcScanner* scanner)
@@ -324,27 +304,7 @@ class OrcStringColumnReader : public OrcPrimitiveColumnReader<OrcStringColumnRea
 
   virtual ~OrcStringColumnReader() { }
 
-  Status UpdateInputBatch(orc::ColumnVectorBatch* orc_batch) override WARN_UNUSED_RESULT {
-    batch_ = static_cast<orc::StringVectorBatch*>(orc_batch);
-    if (orc_batch == nullptr) return Status::OK();
-    // We update the blob of a non-encoded batch every time, but since the dictionary blob
-    // is the same for the stripe, we only reset it for every new stripe.
-    // Note that this is possible since the encoding should be the same for every batch
-    // through the whole stripe.
-    if(!orc_batch->isEncoded) {
-      DCHECK(batch_ == dynamic_cast<orc::StringVectorBatch*>(orc_batch));
-      return InitBlob(&batch_->blob, scanner_->data_batch_pool_.get());
-    }
-    DCHECK(static_cast<orc::EncodedStringVectorBatch*>(batch_) ==
-        dynamic_cast<orc::EncodedStringVectorBatch*>(orc_batch));
-    if (last_stripe_idx_ != scanner_->stripe_idx_) {
-      last_stripe_idx_ = scanner_->stripe_idx_;
-      auto current_batch = static_cast<orc::EncodedStringVectorBatch*>(batch_);
-      return InitBlob(&current_batch->dictionary->dictionaryBlob,
-          scanner_->dictionary_pool_.get());
-    }
-    return Status::OK();
-  }
+  Status UpdateInputBatch(orc::ColumnVectorBatch* orc_batch) override WARN_UNUSED_RESULT;
 
   Status ReadValue(int row_idx, Tuple* tuple, MemPool* pool) final WARN_UNUSED_RESULT;
 
@@ -369,12 +329,7 @@ class OrcStringColumnReader : public OrcPrimitiveColumnReader<OrcStringColumnRea
 class OrcTimestampReader : public OrcPrimitiveColumnReader<OrcTimestampReader> {
  public:
   OrcTimestampReader(const orc::Type* node, const SlotDescriptor* slot_desc,
-      HdfsOrcScanner* scanner)
-      : OrcPrimitiveColumnReader<OrcTimestampReader>(node, slot_desc, scanner) {
-    if (node->getKind() == orc::TIMESTAMP_INSTANT) {
-      timezone_ = scanner_->state_->local_time_zone();
-    }
-  }
+      HdfsOrcScanner* scanner);
 
   virtual ~OrcTimestampReader() { }
 

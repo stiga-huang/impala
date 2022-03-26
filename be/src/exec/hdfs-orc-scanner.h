@@ -16,8 +16,7 @@
 // under the License.
 
 
-#ifndef IMPALA_EXEC_HDFS_ORC_SCANNER_H
-#define IMPALA_EXEC_HDFS_ORC_SCANNER_H
+#pragma once
 
 #include <stack>
 
@@ -29,6 +28,7 @@
 #include "exec/acid-metadata-utils.h"
 #include "exec/hdfs-columnar-scanner.h"
 #include "exec/hdfs-scan-node.h"
+#include "exec/orc-column-readers.h"
 #include "exec/orc-metadata-utils.h"
 #include "util/runtime-profile-counters.h"
 
@@ -186,6 +186,7 @@ class HdfsOrcScanner : public HdfsColumnarScanner {
  private:
   friend class OrcColumnReader;
   friend class OrcDateColumnReader;
+  template<bool, PrimitiveType>
   friend class OrcStringColumnReader;
   friend class OrcTimestampReader;
   friend class OrcComplexColumnReader;
@@ -249,11 +250,14 @@ class HdfsOrcScanner : public HdfsColumnarScanner {
   /// in 'AssembleRows'
   std::unique_ptr<orc::ColumnVectorBatch> orc_root_batch_;
 
+  /// TODO
+  std::unique_ptr<orc::StripeInformation> stripe_info_ = nullptr;
+
   /// The root column reader to transfer orc values into impala RowBatch. The root of
   /// the ORC file schema is always in STRUCT type so we use OrcStructReader here.
-  /// Instead of using std::unique_ptr, this object is tracked in 'obj_pool_' to be
-  /// together with children readers.
-  OrcStructReader* orc_root_reader_ = nullptr;
+  /// We create the reader for each stripe since ORC stripes can have different encodings
+  /// in a column.
+  std::unique_ptr<OrcStructReader> orc_root_reader_ = nullptr;
 
   /// Slot descriptors that don't match any columns of the ORC file. We'll set NULL in
   /// these slots.
@@ -435,4 +439,3 @@ class HdfsOrcScanner : public HdfsColumnarScanner {
 
 } // namespace impala
 
-#endif

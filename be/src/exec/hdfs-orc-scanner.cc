@@ -419,9 +419,9 @@ Status HdfsOrcScanner::Open(ScannerContext* context) {
       context_->expr_results_pool(), scan_node_->stats_conjunct_evals(),
       &stats_conjunct_evals_));
 
-  // To create OrcColumnReaders, we need the selected orc schema. It's a subset of the
-  // file schema: a tree of selected orc types and can only be got from an orc::RowReader
-  // (by orc::RowReader::getSelectedType).
+  // Check the root type and create an orc::ColumnVectorBatch.
+  // The selected orc schema is a subset of the file schema: a tree of selected orc types
+  // and can only be got from an orc::RowReader (by orc::RowReader::getSelectedType).
   // Selected nodes are still connected as a tree since if a node is selected, all its
   // ancestors and children will be selected too.
   // Here we haven't read stripe data yet so no orc::RowReaders are created. To get the
@@ -435,8 +435,6 @@ Status HdfsOrcScanner::Open(ScannerContext* context) {
           root_type->toString(), filename());
       return parse_status_;
     }
-    orc_root_reader_ = this->obj_pool_.Add(
-        new OrcStructReader(root_type, scan_node_->tuple_desc(), this));
     orc_root_batch_ = tmp_row_reader->createRowBatch(state_->batch_size());
     DCHECK_EQ(orc_root_batch_->numElements, 0);
   } RETURN_ON_ORC_EXCEPTION(
@@ -807,7 +805,7 @@ Status HdfsOrcScanner::GetNextInternal(RowBatch* row_batch) {
   // of 'TransferTuples' inside 'AssembleRows'. Since the orc batch has the same capacity
   // as RowBatch's, the remaining values should be drained by one more round of calling
   // 'TransferTuples' here.
-  if (!orc_root_reader_->EndOfBatch()) {
+  if (orc_root_reader_ != nullptr && !orc_root_reader_->EndOfBatch()) {
     assemble_rows_timer_.Start();
     RETURN_IF_ERROR(TransferTuples(row_batch));
     assemble_rows_timer_.Stop();
@@ -918,7 +916,13 @@ Status HdfsOrcScanner::NextStripe() {
     RETURN_IF_ERROR(PrepareSearchArguments());
     try {
       row_reader_ = reader_->createRowReader(row_reader_options_);
+      stripe_info_ = reader_->getStripe(stripe_idx_);
     } RETURN_ON_ORC_EXCEPTION("Error in creating column readers for ORC file $0: $1.");
+    // Re-create orc_root_reader_ for each stripe in case column encodings change.
+    // E.g. string columns can be in direct encoding or dictionary encoding. We have
+    // different reader implementations for them.
+    orc_root_reader_ = std::make_unique<OrcStructReader>(
+        &row_reader_->getSelectedType(), scan_node_->tuple_desc(), this);
     end_of_stripe_ = false;
     VLOG_ROW << Substitute("Created RowReader for stripe(offset=$0, len=$1) in file $2",
         stripe->getOffset(), stripe_len, filename());

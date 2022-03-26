@@ -42,6 +42,34 @@ bool OrcRowValidator::IsRowBatchValid() const {
   return valid_write_ids_.IsWriteIdValid(write_id);
 }
 
+bool OrcColumnReader::IsDictionaryEncodingInCurrStripe(const orc::Type* node,
+    const HdfsOrcScanner* scanner) {
+  auto encoding = scanner->stripe_info_->getColumnEncoding(node->getColumnId());
+  switch (encoding) {
+    case orc::ColumnEncodingKind::ColumnEncodingKind_DICTIONARY:
+    case orc::ColumnEncodingKind::ColumnEncodingKind_DICTIONARY_V2:
+      return true;
+    case orc::ColumnEncodingKind::ColumnEncodingKind_DIRECT:
+    case orc::ColumnEncodingKind::ColumnEncodingKind_DIRECT_V2:
+      return false;
+    default:
+      VLOG(1) << "Unknown ORC column encoding: " << encoding;
+      return false;
+  }
+}
+
+uint64_t OrcColumnReader::GetColId(const SlotDescriptor* desc) const {
+  auto it = scanner_->slot_to_col_id_.find(desc);
+  DCHECK(it != scanner_->slot_to_col_id_.end());
+  return it->second;
+}
+
+uint64_t OrcColumnReader::GetColId(const TupleDescriptor* desc) const {
+  auto it = scanner_->tuple_to_col_id_.find(desc);
+  DCHECK(it != scanner_->tuple_to_col_id_.end());
+  return it->second;
+}
+
 OrcColumnReader* OrcColumnReader::Create(const orc::Type* node,
     const SlotDescriptor* slot_desc, HdfsOrcScanner* scanner) {
   DCHECK(node != nullptr);
@@ -87,9 +115,31 @@ OrcColumnReader* OrcColumnReader::Create(const orc::Type* node,
         reader = new OrcTimestampReader(node, slot_desc, scanner);
         break;
       case TYPE_STRING:
+        if (IsDictionaryEncodingInCurrStripe(node, scanner)) {
+          reader = new OrcStringColumnReader<true, TYPE_STRING>(node, slot_desc,
+              scanner);
+        } else {
+          reader = new OrcStringColumnReader<false, TYPE_STRING>(node, slot_desc,
+              scanner);
+        }
+        break;
       case TYPE_VARCHAR:
+        if (IsDictionaryEncodingInCurrStripe(node, scanner)) {
+          reader = new OrcStringColumnReader<true, TYPE_VARCHAR>(node, slot_desc,
+              scanner);
+        } else {
+          reader = new OrcStringColumnReader<false, TYPE_VARCHAR>(node, slot_desc,
+              scanner);
+        }
+        break;
       case TYPE_CHAR:
-        reader = new OrcStringColumnReader(node, slot_desc, scanner);
+        if (IsDictionaryEncodingInCurrStripe(node, scanner)) {
+          reader = new OrcStringColumnReader<true, TYPE_CHAR>(node, slot_desc,
+              scanner);
+        } else {
+          reader = new OrcStringColumnReader<false, TYPE_CHAR>(node, slot_desc,
+              scanner);
+        }
         break;
       case TYPE_DECIMAL:
         if (node->getPrecision() == 0 || node->getPrecision() > 18) {
@@ -157,6 +207,27 @@ OrcColumnReader::OrcColumnReader(const orc::Type* orc_type,
       << (slot_desc_? slot_desc_->DebugString() : "null");
 }
 
+template<class Final>
+Status OrcBatchedReader<Final>::ReadValueBatch(int row_idx, ScratchTupleBatch* scratch_batch,
+    MemPool* pool, int scratch_batch_idx) {
+  Final* final = this->GetFinal();
+  int num_to_read = std::min<int>(scratch_batch->capacity - scratch_batch_idx,
+      final->NumElements() - row_idx);
+  DCHECK_LE(row_idx + num_to_read, final->NumElements());
+  for (int i = 0; i < num_to_read; ++i) {
+    int scratch_batch_pos = i + scratch_batch_idx;
+    uint8_t* next_tuple = scratch_batch->tuple_mem +
+        scratch_batch_pos * OrcColumnReader::scanner_->tuple_byte_size();
+    Tuple* tuple = reinterpret_cast<Tuple*>(next_tuple);
+    // The compiler will devirtualize the call to ReadValue() if it is marked 'final' in
+    // the 'Final' class. This way we can reduce the number of virtual function calls
+    // to improve performance.
+    RETURN_IF_ERROR(final->ReadValue(row_idx + i, tuple, pool));
+  }
+  scratch_batch->num_tuples = scratch_batch_idx + num_to_read;
+  return Status::OK();
+}
+
 Status OrcBoolColumnReader::ReadValue(int row_idx, Tuple* tuple, MemPool* pool) {
   if (IsNull(DCHECK_NOTNULL(batch_), row_idx)) {
     SetNullSlot(tuple);
@@ -167,29 +238,58 @@ Status OrcBoolColumnReader::ReadValue(int row_idx, Tuple* tuple, MemPool* pool) 
   return Status::OK();
 }
 
-Status OrcStringColumnReader::InitBlob(orc::DataBuffer<char>* blob, MemPool* pool) {
+template<bool ENCODED, PrimitiveType SLOT_TYPE>
+Status OrcStringColumnReader<ENCODED, SLOT_TYPE>::InitBlob(orc::DataBuffer<char>* blob,
+    MemPool* pool) {
   // TODO: IMPALA-9310: Possible improvement is moving the buffer out from orc::DataBuffer
   // instead of copying and let Impala free the memory later.
   blob_ = reinterpret_cast<char*>(pool->TryAllocateUnaligned(blob->size()));
   if (UNLIKELY(blob_ == nullptr)) {
     string details = Substitute("Could not allocate string buffer of $0 bytes "
-        "for ORC file '$1'.", blob->size(), scanner_->filename());
-    return scanner_->scan_node_->mem_tracker()->MemLimitExceeded(
-        scanner_->state_, details, blob->size());
+        "for ORC file '$1'.", blob->size(), this->scanner_->filename());
+    return this->scanner_->scan_node_->mem_tracker()->MemLimitExceeded(
+        this->scanner_->state_, details, blob->size());
   }
   memcpy(blob_, blob->data(), blob->size());
   return Status::OK();
 }
 
-Status OrcStringColumnReader::ReadValue(int row_idx, Tuple* tuple, MemPool* pool) {
-  if (IsNull(DCHECK_NOTNULL(batch_), row_idx)) {
-    SetNullSlot(tuple);
+template<bool ENCODED, PrimitiveType SLOT_TYPE>
+Status OrcStringColumnReader<ENCODED, SLOT_TYPE>::UpdateInputBatch(
+    orc::ColumnVectorBatch* orc_batch) {
+  batch_ = static_cast<orc::StringVectorBatch*>(orc_batch);
+  if (orc_batch == nullptr) return Status::OK();
+  // We update the blob of a non-encoded batch every time, but since the dictionary blob
+  // is the same for the stripe, we only reset it for every new stripe.
+  // Note that this is possible since the encoding should be the same for every batch
+  // through the whole stripe.
+  if(!orc_batch->isEncoded) {
+    DCHECK(batch_ == dynamic_cast<orc::StringVectorBatch*>(orc_batch));
+    return InitBlob(&batch_->blob, this->scanner_->data_batch_pool_.get());
+  }
+  DCHECK(static_cast<orc::EncodedStringVectorBatch*>(batch_) ==
+      dynamic_cast<orc::EncodedStringVectorBatch*>(orc_batch));
+  if (last_stripe_idx_ != this->scanner_->stripe_idx_) {
+    last_stripe_idx_ = this->scanner_->stripe_idx_;
+    auto current_batch = static_cast<orc::EncodedStringVectorBatch*>(batch_);
+    return InitBlob(&current_batch->dictionary->dictionaryBlob,
+        this->scanner_->dictionary_pool_.get());
+  }
+  return Status::OK();
+}
+
+template<bool ENCODED, PrimitiveType SLOT_TYPE>
+Status OrcStringColumnReader<ENCODED, SLOT_TYPE>::ReadValue(int row_idx, Tuple* tuple,
+    MemPool* pool) {
+  if (OrcColumnReader::IsNull(DCHECK_NOTNULL(batch_), row_idx)) {
+    OrcColumnReader::SetNullSlot(tuple);
     return Status::OK();
   }
   char* src_ptr;
   int src_len;
 
-  if (batch_->isEncoded) {
+  if (ENCODED) {
+    DCHECK(batch_->isEncoded);
     orc::EncodedStringVectorBatch* currentBatch =
         static_cast<orc::EncodedStringVectorBatch*>(batch_);
 
@@ -197,7 +297,7 @@ Status OrcStringColumnReader::ReadValue(int row_idx, Tuple* tuple, MemPool* pool
     int64_t index = currentBatch->index[row_idx];
     if (UNLIKELY(index < 0  || static_cast<uint64_t>(index) + 1 >= offsets.size())) {
       return Status(Substitute("Corrupt ORC file: $0. Index ($1) out of range [0, $2) in "
-          "StringDictionary.", scanner_->filename(), index, offsets.size()));;
+          "StringDictionary.", this->scanner_->filename(), index, offsets.size()));;
     }
     src_ptr = blob_ + offsets[index];
     src_len = offsets[index + 1] - offsets[index];
@@ -206,22 +306,32 @@ Status OrcStringColumnReader::ReadValue(int row_idx, Tuple* tuple, MemPool* pool
     src_ptr = blob_ + (batch_->data[row_idx] - batch_->blob.data());
     src_len = batch_->length[row_idx];
   }
-  int dst_len = slot_desc_->type().len;
-  if (slot_desc_->type().type == TYPE_CHAR) {
+  int dst_len = this->slot_desc_->type().len;
+  if (SLOT_TYPE == TYPE_CHAR) {
+    DCHECK_EQ(this->slot_desc_->type().type, TYPE_CHAR);
     int unpadded_len = min(dst_len, static_cast<int>(src_len));
-    char* dst_char = reinterpret_cast<char*>(GetSlot(tuple));
+    char* dst_char = reinterpret_cast<char*>(OrcColumnReader::GetSlot(tuple));
     memcpy(dst_char, src_ptr, unpadded_len);
     StringValue::PadWithSpaces(dst_char, dst_len, unpadded_len);
     return Status::OK();
   }
-  StringValue* dst = reinterpret_cast<StringValue*>(GetSlot(tuple));
-  if (slot_desc_->type().type == TYPE_VARCHAR && src_len > dst_len) {
+  StringValue* dst = reinterpret_cast<StringValue*>(OrcColumnReader::GetSlot(tuple));
+  if (SLOT_TYPE == TYPE_VARCHAR && src_len > dst_len) {
+    DCHECK_EQ(this->slot_desc_->type().type, TYPE_VARCHAR);
     dst->len = dst_len;
   } else {
     dst->len = src_len;
   }
   dst->ptr = src_ptr;
   return Status::OK();
+}
+
+OrcTimestampReader::OrcTimestampReader(const orc::Type* node,
+    const SlotDescriptor* slot_desc, HdfsOrcScanner* scanner)
+    : OrcPrimitiveColumnReader<OrcTimestampReader>(node, slot_desc, scanner) {
+  if (node->getKind() == orc::TIMESTAMP_INSTANT) {
+    timezone_ = scanner_->state_->local_time_zone();
+  }
 }
 
 Status OrcTimestampReader::ReadValue(int row_idx, Tuple* tuple, MemPool* pool) {
