@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <orc/sargs/Literal.hh>
+
 #include "gen-cpp/ImpalaInternalService_types.h"
 #include "impala-ir/impala-ir-functions.h"
 #include "runtime/date-value.h"
@@ -28,6 +30,8 @@
 
 namespace impala {
 
+typedef google::protobuf::RepeatedPtrField<ColumnValuePB> ColumnValueBatchPB;
+
 class InListFilter {
  public:
   /// Upper bound of total length for the string set to avoid it explodes.
@@ -36,27 +40,29 @@ class InListFilter {
   const static uint32_t STRING_SET_MAX_TOTAL_LENGTH = 4 * 1024 * 1024;
 
   InListFilter(ColumnType type, uint32_t entry_limit, bool contains_null = false);
-  ~InListFilter() {}
+  virtual ~InListFilter() {}
   void Close() {}
 
   /// Add a new value to the list.
-  void Insert(const void* val);
+  virtual void Insert(const void* val) = 0;
 
-  std::string DebugString() const noexcept;
+  virtual std::string DebugString() const noexcept = 0;
 
   bool ContainsNull() { return contains_null_; }
   bool AlwaysTrue() { return always_true_; }
-  bool AlwaysFalse();
+  virtual bool AlwaysFalse() = 0;
   static bool AlwaysFalse(const InListFilterPB& filter);
 
   /// Makes this filter always return true.
   void SetAlwaysTrue() { always_true_ = true; }
 
-  bool Find(void* val, const ColumnType& col_type) const noexcept;
-  int NumItems() const noexcept;
+  virtual bool Find(void* val, const ColumnType& col_type) const noexcept = 0;
+  virtual void InsertBatch(const ColumnValueBatchPB& batch) = 0;
+  virtual int NumItems() const noexcept = 0;
+  virtual void ToOrcLiteralList(std::vector<orc::Literal>* in_list) = 0;
 
   /// Returns a new InListFilter with the given type, allocated from 'mem_tracker'.
-  static InListFilter* Create(ColumnType type, uint32_t entry_limit, ObjectPool* pool);
+  static InListFilter* Create(ColumnType type, uint32_t entry_limit, ObjectPool* pool, bool contains_null = false);
 
   /// Returns a new InListFilter created from the protobuf representation, allocated from
   /// 'mem_tracker'.
@@ -76,22 +82,42 @@ class InListFilter {
   /// Return a debug string for the list of the 'filter'
   static std::string DebugStringOfList(const InListFilterPB& filter);
 
- private:
+ protected:
   friend class HdfsOrcScanner;
-  void ToProtobuf(InListFilterPB* protobuf) const;
+  virtual void ToProtobuf(InListFilterPB* protobuf) const = 0;
 
   bool always_true_;
   bool contains_null_;
   PrimitiveType type_;
   // Type len for CHAR type.
   int type_len_;
-  /// Value set for all numeric types. Use int64_t for simplicity.
-  /// TODO(IMPALA-11141): use the exact type to save memory space.
-  std::unordered_set<int64_t> values_;
-  /// Value set for all string types.
-  std::unordered_set<std::string> str_values_;
   uint32_t str_total_size_ = 0;
   uint32_t entry_limit_;
 };
-}
 
+template<typename T, PrimitiveType SLOT_TYPE>
+class InListFilterImpl : public InListFilter {
+ public:
+  InListFilterImpl(ColumnType type, uint32_t entry_limit, bool contains_null = false):
+      InListFilter(type, entry_limit, contains_null) {}
+  ~InListFilterImpl() {}
+
+  bool AlwaysFalse() override {
+    return !always_true_ && !contains_null_ && set_values_.empty();
+  }
+  void Insert(const void* val) override;
+  bool Find(void* val, const ColumnType& col_type) const noexcept override;
+  void InsertBatch(const ColumnValueBatchPB& batch) override;
+  int NumItems() const noexcept override {
+    return set_values_.size() + (contains_null_ ? 1 : 0);
+  }
+  void ToProtobuf(InListFilterPB* protobuf) const override;
+  void ToOrcLiteralList(std::vector<orc::Literal>* in_list) override {
+    for (auto v : set_values_) in_list->emplace_back(static_cast<int64_t>(v));
+  }
+
+  std::string DebugString() const noexcept override;
+ private:
+  std::unordered_set<T> set_values_;
+};
+}

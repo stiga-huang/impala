@@ -20,56 +20,106 @@
 
 namespace impala {
 
-void InListFilter::Insert(const void* val) {
+#define NUMERIC_IN_LIST_FILTER_INSERT(TYPE, SLOT_TYPE)              \
+  template<>                                                        \
+  void InListFilterImpl<TYPE, SLOT_TYPE>::Insert(const void* val) { \
+if (always_true_) return;\
+if (UNLIKELY(val == nullptr)) {\
+contains_null_ = true;\
+return;\
+}\
+if (UNLIKELY(set_values_.size() >= entry_limit_)) {\
+always_true_ = true;\
+set_values_.clear();\
+return;\
+}                                                                \
+    set_values_.insert(*reinterpret_cast<const TYPE*>(val));\
+  }
+
+NUMERIC_IN_LIST_FILTER_INSERT(int8_t, TYPE_TINYINT)
+NUMERIC_IN_LIST_FILTER_INSERT(int16_t, TYPE_SMALLINT)
+NUMERIC_IN_LIST_FILTER_INSERT(int32_t, TYPE_INT)
+NUMERIC_IN_LIST_FILTER_INSERT(int64_t, TYPE_BIGINT)
+
+template<>
+void InListFilterImpl<int64_t, TYPE_DATE>::Insert(const void* val) {
   if (always_true_) return;
   if (UNLIKELY(val == nullptr)) {
     contains_null_ = true;
     return;
   }
-  if (UNLIKELY(values_.size() >= entry_limit_ || str_values_.size() >= entry_limit_)) {
+  if (UNLIKELY(set_values_.size() >= entry_limit_)) {
     always_true_ = true;
-    values_.clear();
-    str_values_.clear();
+    set_values_.clear();
     return;
   }
-  switch (type_) {
-    case TYPE_TINYINT:
-      values_.insert(*reinterpret_cast<const int8_t*>(val));
-      break;
-    case TYPE_SMALLINT:
-      values_.insert(*reinterpret_cast<const int16_t*>(val));
-      break;
-    case TYPE_INT:
-      values_.insert(*reinterpret_cast<const int32_t*>(val));
-      break;
-    case TYPE_BIGINT:
-      values_.insert(*reinterpret_cast<const int64_t*>(val));
-      break;
-    case TYPE_DATE:
-      values_.insert(reinterpret_cast<const DateValue*>(val)->Value());
-      break;
-    case TYPE_STRING:
-    case TYPE_VARCHAR: {
-      const StringValue* s = reinterpret_cast<const StringValue*>(val);
-      if (UNLIKELY(s->ptr == nullptr)) {
-        contains_null_ = true;
-      } else {
-        str_total_size_ += s->len;
-        if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
-          always_true_ = true;
-          str_values_.clear();
-          return;
-        }
-        str_values_.insert(string(s->ptr, s->len));
-      }
-      break;
-    }
-    case TYPE_CHAR:
-      str_values_.insert(string(reinterpret_cast<const char*>(val), type_len_));
-      break;
-    default:
-      DCHECK(false) << "Not supported IN-list filter type: " << TypeToString(type_);
-      break;
+  set_values_.insert(reinterpret_cast<const DateValue*>(val)->Value());
+}
+
+template<>
+void InListFilterImpl<string, TYPE_STRING>::Insert(const void* val) {
+  if (always_true_) return;
+  if (UNLIKELY(val == nullptr)) {
+    contains_null_ = true;
+    return;
   }
+  if (UNLIKELY(set_values_.size() >= entry_limit_)) {
+    always_true_ = true;
+    set_values_.clear();
+    return;
+  }
+  const StringValue* s = reinterpret_cast<const StringValue*>(val);
+  if (UNLIKELY(s->ptr == nullptr)) {
+    contains_null_ = true;
+  } else {
+    str_total_size_ += s->len;
+    if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
+      always_true_ = true;
+      set_values_.clear();
+      return;
+    }
+    set_values_.insert(string(s->ptr, s->len));
+  }
+}
+
+template<>
+void InListFilterImpl<string, TYPE_VARCHAR>::Insert(const void* val) {
+  if (always_true_) return;
+  if (UNLIKELY(val == nullptr)) {
+    contains_null_ = true;
+    return;
+  }
+  if (UNLIKELY(set_values_.size() >= entry_limit_)) {
+    always_true_ = true;
+    set_values_.clear();
+    return;
+  }
+  const StringValue* s = reinterpret_cast<const StringValue*>(val);
+  if (UNLIKELY(s->ptr == nullptr)) {
+    contains_null_ = true;
+  } else {
+    str_total_size_ += s->len;
+    if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
+      always_true_ = true;
+      set_values_.clear();
+      return;
+    }
+    set_values_.insert(string(s->ptr, s->len));
+  }
+}
+
+template<>
+void InListFilterImpl<string, TYPE_CHAR>::Insert(const void* val) {
+  if (always_true_) return;
+  if (UNLIKELY(val == nullptr)) {
+    contains_null_ = true;
+    return;
+  }
+  if (UNLIKELY(set_values_.size() >= entry_limit_)) {
+    always_true_ = true;
+    set_values_.clear();
+    return;
+  }
+  set_values_.insert(string(reinterpret_cast<const char*>(val), type_len_));
 }
 } // namespace impala
