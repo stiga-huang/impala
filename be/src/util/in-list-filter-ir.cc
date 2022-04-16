@@ -16,6 +16,7 @@
 // under the License.
 
 #include "common/object-pool.h"
+#include "runtime/string-value.inline.h"
 #include "util/in-list-filter.h"
 
 namespace impala {
@@ -57,69 +58,93 @@ void InListFilterImpl<int64_t, TYPE_DATE>::Insert(const void* val) {
 }
 
 template<>
-void InListFilterImpl<string, TYPE_STRING>::Insert(const void* val) {
+void InListFilterImpl<StringValue, TYPE_STRING>::Insert(const void* val) {
   if (always_true_) return;
   if (UNLIKELY(val == nullptr)) {
     contains_null_ = true;
     return;
   }
-  if (UNLIKELY(set_values_.size() >= entry_limit_)) {
+  if (UNLIKELY(set_values_.size() + new_values_.size() >= entry_limit_)) {
     always_true_ = true;
     set_values_.clear();
+    new_values_.clear();
     return;
   }
   const StringValue* s = reinterpret_cast<const StringValue*>(val);
   if (UNLIKELY(s->ptr == nullptr)) {
     contains_null_ = true;
-  } else {
-    str_total_size_ += s->len;
-    if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
-      always_true_ = true;
-      set_values_.clear();
-      return;
+  } else if (set_values_.find(*s) == set_values_.end()) {
+    const auto& res = new_values_.insert(*s);
+    if (res.second) {
+      str_total_size_ += s->len;
+      new_values_total_len_ += s->len;
+      if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
+        always_true_ = true;
+        set_values_.clear();
+        new_values_.clear();
+        return;
+      }
     }
-    set_values_.insert(string(s->ptr, s->len));
   }
 }
 
 template<>
-void InListFilterImpl<string, TYPE_VARCHAR>::Insert(const void* val) {
+void InListFilterImpl<StringValue, TYPE_VARCHAR>::Insert(const void* val) {
   if (always_true_) return;
   if (UNLIKELY(val == nullptr)) {
     contains_null_ = true;
     return;
   }
-  if (UNLIKELY(set_values_.size() >= entry_limit_)) {
+  if (UNLIKELY(set_values_.size() + new_values_.size() >= entry_limit_)) {
     always_true_ = true;
     set_values_.clear();
+    new_values_.clear();
     return;
   }
   const StringValue* s = reinterpret_cast<const StringValue*>(val);
   if (UNLIKELY(s->ptr == nullptr)) {
     contains_null_ = true;
-  } else {
-    str_total_size_ += s->len;
-    if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
-      always_true_ = true;
-      set_values_.clear();
-      return;
+  } else if (set_values_.find(*s) == set_values_.end()) {
+    const auto& res = new_values_.insert(*s);
+    if (res.second) {
+      str_total_size_ += s->len;
+      new_values_total_len_ += s->len;
+      if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
+        always_true_ = true;
+        set_values_.clear();
+        new_values_.clear();
+        return;
+      }
     }
-    set_values_.insert(string(s->ptr, s->len));
   }
 }
 
 template<>
-void InListFilterImpl<string, TYPE_CHAR>::Insert(const void* val) {
+void InListFilterImpl<StringValue, TYPE_CHAR>::Insert(const void* val) {
   if (always_true_) return;
   if (UNLIKELY(val == nullptr)) {
     contains_null_ = true;
     return;
   }
-  if (UNLIKELY(set_values_.size() >= entry_limit_)) {
+  if (UNLIKELY(set_values_.size() + new_values_.size() >= entry_limit_)) {
     always_true_ = true;
     set_values_.clear();
+    new_values_.clear();
     return;
   }
-  set_values_.insert(string(reinterpret_cast<const char*>(val), type_len_));
+  StringValue s{const_cast<char*>(reinterpret_cast<const char*>(val)), type_len_};
+  if (set_values_.find(s) == set_values_.end()) {
+    const auto& res = new_values_.insert(s);
+    if (res.second) {
+      str_total_size_ += s.len;
+      new_values_total_len_ += s.len;
+      if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
+        always_true_ = true;
+        set_values_.clear();
+        new_values_.clear();
+        return;
+      }
+    }
+  }
 }
 } // namespace impala

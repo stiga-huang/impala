@@ -18,6 +18,7 @@
 #pragma once
 
 #include <orc/sargs/Literal.hh>
+#include <boost/unordered_set.hpp>
 
 #include "gen-cpp/ImpalaInternalService_types.h"
 #include "impala-ir/impala-ir-functions.h"
@@ -41,10 +42,15 @@ class InListFilter {
 
   InListFilter(ColumnType type, uint32_t entry_limit, bool contains_null = false);
   virtual ~InListFilter() {}
-  void Close() {}
+  virtual void Close() {}
 
   /// Add a new value to the list.
   virtual void Insert(const void* val) = 0;
+
+  /// Materialize filter values by copying any values stored by filters into memory owned
+  /// by the filter. Filters may assume that the memory for Insert()-ed values stays valid
+  /// until this is called.
+  virtual void MaterializeValues() {}
 
   virtual std::string DebugString() const noexcept = 0;
 
@@ -62,12 +68,13 @@ class InListFilter {
   virtual void ToOrcLiteralList(std::vector<orc::Literal>* in_list) = 0;
 
   /// Returns a new InListFilter with the given type, allocated from 'mem_tracker'.
-  static InListFilter* Create(ColumnType type, uint32_t entry_limit, ObjectPool* pool, bool contains_null = false);
+  static InListFilter* Create(ColumnType type, uint32_t entry_limit, ObjectPool* pool,
+      MemTracker* mem_tracker, bool contains_null = false);
 
   /// Returns a new InListFilter created from the protobuf representation, allocated from
   /// 'mem_tracker'.
   static InListFilter* Create(const InListFilterPB& protobuf, ColumnType type,
-      uint32_t entry_limit, ObjectPool* pool);
+      uint32_t entry_limit, ObjectPool* pool, MemTracker* mem_tracker);
 
   /// Converts 'filter' to its corresponding Protobuf representation.
   /// If the first argument is NULL, it is interpreted as a complete filter which
@@ -89,9 +96,6 @@ class InListFilter {
   bool always_true_;
   bool contains_null_;
   PrimitiveType type_;
-  // Type len for CHAR type.
-  int type_len_;
-  uint32_t str_total_size_ = 0;
   uint32_t entry_limit_;
 };
 
@@ -102,16 +106,22 @@ class InListFilterImpl : public InListFilter {
       InListFilter(type, entry_limit, contains_null) {}
   ~InListFilterImpl() {}
 
-  bool AlwaysFalse() override {
-    return !always_true_ && !contains_null_ && set_values_.empty();
-  }
+  bool AlwaysFalse() override;
+  int NumItems() const noexcept override;
+
   void Insert(const void* val) override;
-  bool Find(void* val, const ColumnType& col_type) const noexcept override;
   void InsertBatch(const ColumnValueBatchPB& batch) override;
-  int NumItems() const noexcept override {
-    return set_values_.size() + (contains_null_ ? 1 : 0);
+
+  bool Find(void* val, const ColumnType& col_type) const noexcept override {
+    if (always_true_) return true;
+    if (val == nullptr) return contains_null_;
+    DCHECK_EQ(type_, col_type.type);
+    T v = *reinterpret_cast<const T*>(val);
+    return set_values_.find(v) != set_values_.end();
   }
+
   void ToProtobuf(InListFilterPB* protobuf) const override;
+
   void ToOrcLiteralList(std::vector<orc::Literal>* in_list) override {
     for (auto v : set_values_) in_list->emplace_back(static_cast<int64_t>(v));
   }
@@ -119,5 +129,64 @@ class InListFilterImpl : public InListFilter {
   std::string DebugString() const noexcept override;
  private:
   std::unordered_set<T> set_values_;
+};
+
+template<PrimitiveType SLOT_TYPE>
+class InListFilterImpl<StringValue, SLOT_TYPE> : public InListFilter {
+ public:
+  InListFilterImpl(ColumnType type, uint32_t entry_limit, MemTracker* mem_tracker,
+      bool contains_null = false):
+      InListFilter(type, entry_limit, contains_null), mem_pool_(mem_tracker) {
+    if (SLOT_TYPE == TYPE_CHAR) type_len_ = type.len;
+  }
+  ~InListFilterImpl() {}
+  void Close() override { mem_pool_.FreeAll(); }
+
+  bool AlwaysFalse() override {
+    return !always_true_ && !contains_null_ && set_values_.empty();
+  }
+  int NumItems() const noexcept override {
+    return set_values_.size() + (contains_null_ ? 1 : 0);
+  }
+
+  void Insert(const void* val) override;
+  void InsertBatch(const ColumnValueBatchPB& batch) override;
+  void MaterializeValues() override {
+    if (new_values_total_len_ == 0) {
+      if (!new_values_.empty()) {
+        set_values_.insert(new_values_.begin(), new_values_.end());
+      }
+      return;
+    }
+    uint8_t* buffer = mem_pool_.Allocate(new_values_total_len_);
+    if (buffer == nullptr) {
+      VLOG_QUERY << "Not enough memory in materializing string IN-list filters: "
+                 << new_values_total_len_ << ", " << mem_pool_.DebugString();
+      always_true_ = true;
+      set_values_.clear();
+      new_values_.clear();
+      return;
+    }
+    for (const StringValue& s : new_values_) {
+      std::memcpy(buffer, s.ptr, s.len);
+      set_values_.insert(StringValue(reinterpret_cast<char*>(buffer), s.len));
+      buffer += s.len;
+    }
+    new_values_.clear();
+    new_values_total_len_ = 0;
+  }
+  bool Find(void* val, const ColumnType& col_type) const noexcept override;
+
+  void ToProtobuf(InListFilterPB* protobuf) const override;
+  void ToOrcLiteralList(std::vector<orc::Literal>* in_list) override;
+  std::string DebugString() const noexcept override;
+ private:
+  MemPool mem_pool_;
+  boost::unordered_set<StringValue> set_values_;
+  boost::unordered_set<StringValue> new_values_;
+  size_t new_values_total_len_ = 0;
+  // Type len for CHAR type.
+  int type_len_;
+  uint32_t str_total_size_ = 0;
 };
 }

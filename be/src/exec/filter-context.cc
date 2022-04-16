@@ -127,6 +127,8 @@ void FilterContext::InsertPerCompareOp(TupleRow* row) const noexcept {
 void FilterContext::MaterializeValues() const {
   if (filter->is_min_max_filter() && local_min_max_filter != nullptr) {
     local_min_max_filter->MaterializeValues();
+  } else if (filter->is_in_list_filter() && local_in_list_filter != nullptr) {
+    local_in_list_filter->MaterializeValues();
   }
 }
 
