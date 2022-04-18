@@ -107,19 +107,17 @@ class InListFilterImpl : public InListFilter {
       InListFilter(type, entry_limit, contains_null) {}
   ~InListFilterImpl() {}
 
-  bool AlwaysFalse() override;
-  int NumItems() const noexcept override;
+  bool AlwaysFalse() override {
+    return !always_true_ && !contains_null_ && values_.empty();
+  }
+  int NumItems() const noexcept override {
+    return values_.size() + (contains_null_ ? 1 : 0);
+  }
 
   void Insert(const void* val) override;
   void InsertBatch(const ColumnValueBatchPB& batch) override;
 
-  bool Find(void* val, const ColumnType& col_type) const noexcept override {
-    if (always_true_) return true;
-    if (val == nullptr) return contains_null_;
-    DCHECK_EQ(type_, col_type.type);
-    T v = *reinterpret_cast<const T*>(val);
-    return values_.find(v) != values_.end();
-  }
+  bool Find(void* val, const ColumnType& col_type) const noexcept override;
 
   void ToProtobuf(InListFilterPB* protobuf) const override;
 

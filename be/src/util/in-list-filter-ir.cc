@@ -26,29 +26,36 @@ int64_t InListFilterImpl<int64_t, TYPE_DATE>::GetValue(const void* val) {
   return reinterpret_cast<const DateValue*>(val)->Value();
 }
 
-#define NUMERIC_IN_LIST_FILTER_INSERT(TYPE, SLOT_TYPE)              \
-  template<>                                                        \
-  void InListFilterImpl<TYPE, SLOT_TYPE>::Insert(const void* val) { \
-    if (always_true_) return;                                       \
-    if (UNLIKELY(val == nullptr)) {                                 \
-      contains_null_ = true;                                        \
-      return;                                                       \
-    }                                                               \
-    const auto& res = values_.insert(GetValue(val));                \
-    if (res.second) {                                               \
-      ++total_entries_;                                             \
-      if (UNLIKELY(total_entries_ > entry_limit_)) {                \
-        always_true_ = true;                                        \
-        values_.clear();                                            \
-      }                                                             \
-    }                                                               \
+#define NUMERIC_IN_LIST_FILTER_FUNCTIONS(TYPE, SLOT_TYPE)                             \
+  template<>                                                                          \
+  void InListFilterImpl<TYPE, SLOT_TYPE>::Insert(const void* val) {                   \
+    if (always_true_) return;                                                         \
+    if (UNLIKELY(val == nullptr)) {                                                   \
+      contains_null_ = true;                                                          \
+      return;                                                                         \
+    }                                                                                 \
+    const auto& res = values_.insert(GetValue(val));                                  \
+    if (res.second) {                                                                 \
+      ++total_entries_;                                                               \
+      if (UNLIKELY(total_entries_ > entry_limit_)) {                                  \
+        always_true_ = true;                                                          \
+        values_.clear();                                                              \
+      }                                                                               \
+    }                                                                                 \
+  }                                                                                   \
+  template<>                                                                          \
+  bool InListFilterImpl<TYPE, SLOT_TYPE>::Find(void* val, const ColumnType& col_type) \
+      const noexcept {                                                                \
+    if (always_true_) return true;                                                    \
+    if (val == nullptr) return contains_null_;                                        \
+    return values_.find(GetValue(val)) != values_.end();                              \
   }
 
-NUMERIC_IN_LIST_FILTER_INSERT(int8_t, TYPE_TINYINT)
-NUMERIC_IN_LIST_FILTER_INSERT(int16_t, TYPE_SMALLINT)
-NUMERIC_IN_LIST_FILTER_INSERT(int32_t, TYPE_INT)
-NUMERIC_IN_LIST_FILTER_INSERT(int64_t, TYPE_BIGINT)
-NUMERIC_IN_LIST_FILTER_INSERT(int64_t, TYPE_DATE)
+NUMERIC_IN_LIST_FILTER_FUNCTIONS(int8_t, TYPE_TINYINT)
+NUMERIC_IN_LIST_FILTER_FUNCTIONS(int16_t, TYPE_SMALLINT)
+NUMERIC_IN_LIST_FILTER_FUNCTIONS(int32_t, TYPE_INT)
+NUMERIC_IN_LIST_FILTER_FUNCTIONS(int64_t, TYPE_BIGINT)
+NUMERIC_IN_LIST_FILTER_FUNCTIONS(int64_t, TYPE_DATE)
 
 template<>
 StringValue InListFilterImpl<StringValue, TYPE_CHAR>::GetValue(const void* val,
@@ -56,7 +63,7 @@ StringValue InListFilterImpl<StringValue, TYPE_CHAR>::GetValue(const void* val,
   return {const_cast<char*>(reinterpret_cast<const char*>(val)), char_type_len};
 }
 
-#define STRING_IN_LIST_FILTER_INSERT(SLOT_TYPE)                              \
+#define STRING_IN_LIST_FILTER_FUNCTIONS(SLOT_TYPE)                           \
   template<>                                                                 \
   void InListFilterImpl<StringValue, SLOT_TYPE>::Insert(const void* val) {   \
     if (always_true_) return;                                                \
@@ -80,10 +87,20 @@ StringValue InListFilterImpl<StringValue, TYPE_CHAR>::GetValue(const void* val,
         }                                                                    \
       }                                                                      \
     }                                                                        \
+  }                                                                          \
+                                                                             \
+  template<>                                                                 \
+  bool InListFilterImpl<StringValue, SLOT_TYPE>::Find(void* val,             \
+      const ColumnType& col_type) const noexcept {                           \
+    if (always_true_) return true;                                           \
+    if (val == nullptr) return contains_null_;                               \
+    DCHECK_EQ(type_, col_type.type);                                         \
+    const StringValue* s = reinterpret_cast<const StringValue*>(val);        \
+    return values_.find(*s) != values_.end();                                \
   }
 
-STRING_IN_LIST_FILTER_INSERT(TYPE_STRING)
-STRING_IN_LIST_FILTER_INSERT(TYPE_VARCHAR)
-STRING_IN_LIST_FILTER_INSERT(TYPE_CHAR)
+STRING_IN_LIST_FILTER_FUNCTIONS(TYPE_STRING)
+STRING_IN_LIST_FILTER_FUNCTIONS(TYPE_VARCHAR)
+STRING_IN_LIST_FILTER_FUNCTIONS(TYPE_CHAR)
 
 } // namespace impala
