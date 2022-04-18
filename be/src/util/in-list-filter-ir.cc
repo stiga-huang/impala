@@ -21,130 +21,69 @@
 
 namespace impala {
 
+template<>
+int64_t InListFilterImpl<int64_t, TYPE_DATE>::GetValue(const void* val) {
+  return reinterpret_cast<const DateValue*>(val)->Value();
+}
+
 #define NUMERIC_IN_LIST_FILTER_INSERT(TYPE, SLOT_TYPE)              \
   template<>                                                        \
   void InListFilterImpl<TYPE, SLOT_TYPE>::Insert(const void* val) { \
-if (always_true_) return;\
-if (UNLIKELY(val == nullptr)) {\
-contains_null_ = true;\
-return;\
-}\
-if (UNLIKELY(set_values_.size() >= entry_limit_)) {\
-always_true_ = true;\
-set_values_.clear();\
-return;\
-}                                                                \
-    set_values_.insert(*reinterpret_cast<const TYPE*>(val));\
+    if (always_true_) return;                                       \
+    if (UNLIKELY(val == nullptr)) {                                 \
+      contains_null_ = true;                                        \
+      return;                                                       \
+    }                                                               \
+    const auto& res = values_.insert(GetValue(val));                \
+    if (res.second) {                                               \
+      ++total_entries_;                                             \
+      if (UNLIKELY(total_entries_ > entry_limit_)) {                \
+        always_true_ = true;                                        \
+        values_.clear();                                            \
+      }                                                             \
+    }                                                               \
   }
 
 NUMERIC_IN_LIST_FILTER_INSERT(int8_t, TYPE_TINYINT)
 NUMERIC_IN_LIST_FILTER_INSERT(int16_t, TYPE_SMALLINT)
 NUMERIC_IN_LIST_FILTER_INSERT(int32_t, TYPE_INT)
 NUMERIC_IN_LIST_FILTER_INSERT(int64_t, TYPE_BIGINT)
+NUMERIC_IN_LIST_FILTER_INSERT(int64_t, TYPE_DATE)
 
 template<>
-void InListFilterImpl<int64_t, TYPE_DATE>::Insert(const void* val) {
-  if (always_true_) return;
-  if (UNLIKELY(val == nullptr)) {
-    contains_null_ = true;
-    return;
-  }
-  if (UNLIKELY(set_values_.size() >= entry_limit_)) {
-    always_true_ = true;
-    set_values_.clear();
-    return;
-  }
-  set_values_.insert(reinterpret_cast<const DateValue*>(val)->Value());
+StringValue InListFilterImpl<StringValue, TYPE_CHAR>::GetValue(const void* val,
+    int char_type_len) {
+  return {const_cast<char*>(reinterpret_cast<const char*>(val)), char_type_len};
 }
 
-template<>
-void InListFilterImpl<StringValue, TYPE_STRING>::Insert(const void* val) {
-  if (always_true_) return;
-  if (UNLIKELY(val == nullptr)) {
-    contains_null_ = true;
-    return;
+#define STRING_IN_LIST_FILTER_INSERT(SLOT_TYPE)                              \
+  template<>                                                                 \
+  void InListFilterImpl<StringValue, SLOT_TYPE>::Insert(const void* val) {   \
+    if (always_true_) return;                                                \
+    if (UNLIKELY(val == nullptr)) {                                          \
+      contains_null_ = true;                                                 \
+      return;                                                                \
+    }                                                                        \
+    StringValue s = GetValue(val, type_len_);                                \
+    if (values_.find(s) == values_.end()) {                                  \
+      const auto& res = new_values_.insert(s);                               \
+      if (res.second) {                                                      \
+        str_total_size_ += s.len;                                            \
+        new_values_total_len_ += s.len;                                      \
+        ++total_entries_;                                                    \
+        if (UNLIKELY(total_entries_ > entry_limit_                           \
+            || str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH)) {            \
+          always_true_ = true;                                               \
+          values_.clear();                                                   \
+          new_values_.clear();                                               \
+          return;                                                            \
+        }                                                                    \
+      }                                                                      \
+    }                                                                        \
   }
-  if (UNLIKELY(set_values_.size() + new_values_.size() >= entry_limit_)) {
-    always_true_ = true;
-    set_values_.clear();
-    new_values_.clear();
-    return;
-  }
-  const StringValue* s = reinterpret_cast<const StringValue*>(val);
-  if (UNLIKELY(s->ptr == nullptr)) {
-    contains_null_ = true;
-  } else if (set_values_.find(*s) == set_values_.end()) {
-    const auto& res = new_values_.insert(*s);
-    if (res.second) {
-      str_total_size_ += s->len;
-      new_values_total_len_ += s->len;
-      if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
-        always_true_ = true;
-        set_values_.clear();
-        new_values_.clear();
-        return;
-      }
-    }
-  }
-}
 
-template<>
-void InListFilterImpl<StringValue, TYPE_VARCHAR>::Insert(const void* val) {
-  if (always_true_) return;
-  if (UNLIKELY(val == nullptr)) {
-    contains_null_ = true;
-    return;
-  }
-  if (UNLIKELY(set_values_.size() + new_values_.size() >= entry_limit_)) {
-    always_true_ = true;
-    set_values_.clear();
-    new_values_.clear();
-    return;
-  }
-  const StringValue* s = reinterpret_cast<const StringValue*>(val);
-  if (UNLIKELY(s->ptr == nullptr)) {
-    contains_null_ = true;
-  } else if (set_values_.find(*s) == set_values_.end()) {
-    const auto& res = new_values_.insert(*s);
-    if (res.second) {
-      str_total_size_ += s->len;
-      new_values_total_len_ += s->len;
-      if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
-        always_true_ = true;
-        set_values_.clear();
-        new_values_.clear();
-        return;
-      }
-    }
-  }
-}
+STRING_IN_LIST_FILTER_INSERT(TYPE_STRING)
+STRING_IN_LIST_FILTER_INSERT(TYPE_VARCHAR)
+STRING_IN_LIST_FILTER_INSERT(TYPE_CHAR)
 
-template<>
-void InListFilterImpl<StringValue, TYPE_CHAR>::Insert(const void* val) {
-  if (always_true_) return;
-  if (UNLIKELY(val == nullptr)) {
-    contains_null_ = true;
-    return;
-  }
-  if (UNLIKELY(set_values_.size() + new_values_.size() >= entry_limit_)) {
-    always_true_ = true;
-    set_values_.clear();
-    new_values_.clear();
-    return;
-  }
-  StringValue s{const_cast<char*>(reinterpret_cast<const char*>(val)), type_len_};
-  if (set_values_.find(s) == set_values_.end()) {
-    const auto& res = new_values_.insert(s);
-    if (res.second) {
-      str_total_size_ += s.len;
-      new_values_total_len_ += s.len;
-      if (str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH) {
-        always_true_ = true;
-        set_values_.clear();
-        new_values_.clear();
-        return;
-      }
-    }
-  }
-}
 } // namespace impala
