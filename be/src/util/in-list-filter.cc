@@ -49,8 +49,8 @@ InListFilter* InListFilter::Create(ColumnType type, uint32_t entry_limit,
       res = new InListFilterImpl<int64_t, TYPE_BIGINT>(type, entry_limit, contains_null);
       break;
     case TYPE_DATE:
-      // We use int64_t for DATE type as well
-      res = new InListFilterImpl<int64_t, TYPE_DATE>(type, entry_limit, contains_null);
+      // We use int32_t for DATE type as well
+      res = new InListFilterImpl<int32_t, TYPE_DATE>(type, entry_limit, contains_null);
       break;
     case TYPE_STRING:
       res = new InListFilterImpl<StringValue, TYPE_STRING>(type, entry_limit,
@@ -157,7 +157,7 @@ IN_LIST_FILTER_INSERT_BATCH(int8_t, TYPE_TINYINT, byte_val)
 IN_LIST_FILTER_INSERT_BATCH(int16_t, TYPE_SMALLINT, short_val)
 IN_LIST_FILTER_INSERT_BATCH(int32_t, TYPE_INT, int_val)
 IN_LIST_FILTER_INSERT_BATCH(int64_t, TYPE_BIGINT, long_val)
-IN_LIST_FILTER_INSERT_BATCH(int64_t, TYPE_DATE, long_val)
+IN_LIST_FILTER_INSERT_BATCH(int32_t, TYPE_DATE, int_val)
 IN_LIST_FILTER_INSERT_BATCH(StringValue, TYPE_STRING, string_val)
 IN_LIST_FILTER_INSERT_BATCH(StringValue, TYPE_VARCHAR, string_val)
 IN_LIST_FILTER_INSERT_BATCH(StringValue, TYPE_CHAR, string_val)
@@ -178,7 +178,7 @@ NUMERIC_IN_LIST_FILTER_TO_PROTOBUF(int8_t, TYPE_TINYINT, byte_val)
 NUMERIC_IN_LIST_FILTER_TO_PROTOBUF(int16_t, TYPE_SMALLINT, short_val)
 NUMERIC_IN_LIST_FILTER_TO_PROTOBUF(int32_t, TYPE_INT, int_val)
 NUMERIC_IN_LIST_FILTER_TO_PROTOBUF(int64_t, TYPE_BIGINT, long_val)
-NUMERIC_IN_LIST_FILTER_TO_PROTOBUF(int64_t, TYPE_DATE, long_val)
+NUMERIC_IN_LIST_FILTER_TO_PROTOBUF(int32_t, TYPE_DATE, long_val)
 
 #define STRING_IN_LIST_FILTER_TO_PROTOBUF(SLOT_TYPE)                                   \
   template<>                                                                           \
@@ -198,9 +198,9 @@ STRING_IN_LIST_FILTER_TO_PROTOBUF(TYPE_VARCHAR)
 STRING_IN_LIST_FILTER_TO_PROTOBUF(TYPE_CHAR)
 
 template<>
-void InListFilterImpl<int64_t, TYPE_DATE>::ToOrcLiteralList(
+void InListFilterImpl<int32_t, TYPE_DATE>::ToOrcLiteralList(
     vector<orc::Literal>* in_list) {
-  for (int64_t v : values_) {
+  for (int32_t v : values_) {
     in_list->emplace_back(orc::PredicateDataType::DATE, v);
   }
 }

@@ -22,7 +22,7 @@
 namespace impala {
 
 template<>
-int64_t InListFilterImpl<int64_t, TYPE_DATE>::GetValue(const void* val) {
+int32_t InListFilterImpl<int32_t, TYPE_DATE>::GetValue(const void* val) {
   return reinterpret_cast<const DateValue*>(val)->Value();
 }
 
@@ -56,7 +56,7 @@ NUMERIC_IN_LIST_FILTER_FUNCTIONS(int8_t, TYPE_TINYINT)
 NUMERIC_IN_LIST_FILTER_FUNCTIONS(int16_t, TYPE_SMALLINT)
 NUMERIC_IN_LIST_FILTER_FUNCTIONS(int32_t, TYPE_INT)
 NUMERIC_IN_LIST_FILTER_FUNCTIONS(int64_t, TYPE_BIGINT)
-NUMERIC_IN_LIST_FILTER_FUNCTIONS(int64_t, TYPE_DATE)
+NUMERIC_IN_LIST_FILTER_FUNCTIONS(int32_t, TYPE_DATE)
 
 template<>
 StringValue InListFilterImpl<StringValue, TYPE_CHAR>::GetValue(const void* val,
