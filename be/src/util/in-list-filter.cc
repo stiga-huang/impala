@@ -89,6 +89,35 @@ void InListFilter::ToProtobuf(const InListFilter* filter, InListFilterPB* protob
   filter->ToProtobuf(protobuf);
 }
 
+string InListFilter::DebugString() const noexcept {
+  std::stringstream ss;
+  ss << "IN-list filter of " << total_entries_ << " items";
+  if (contains_null_) ss << " with NULL";
+  return ss.str();
+}
+
+string InListFilter::DebugString(const InListFilterPB& filter) {
+  std::stringstream ss;
+  ss << "IN-list filter: " << DebugStringOfList(filter);
+  return ss.str();
+}
+
+string InListFilter::DebugStringOfList(const InListFilterPB& filter) {
+  std::stringstream ss;
+  ss << "[";
+  bool first_value = true;
+  for (const ColumnValuePB& v : filter.value()) {
+    if (first_value) {
+      first_value = false;
+    } else {
+      ss << ',';
+    }
+    ss << v.ShortDebugString();
+  }
+  ss << ']';
+  return ss.str();
+}
+
 template<PrimitiveType SLOT_TYPE>
 void InListFilterImpl<StringValue, SLOT_TYPE>::MaterializeValues() {
   if (new_values_total_len_ == 0) {
@@ -107,7 +136,7 @@ void InListFilterImpl<StringValue, SLOT_TYPE>::MaterializeValues() {
     return;
   }
   for (const StringValue& s : new_values_) {
-    std::memcpy(buffer, s.ptr, s.len);
+    Ubsan::MemCpy(buffer, s.ptr, s.len);
     values_.insert(StringValue(reinterpret_cast<char*>(buffer), s.len));
     buffer += s.len;
   }
@@ -120,7 +149,7 @@ void InListFilterImpl<StringValue, SLOT_TYPE>::MaterializeValues() {
   void InListFilterImpl<TYPE, SLOT_TYPE>::InsertBatch(const ColumnValueBatchPB& batch) { \
     for (const ColumnValuePB& v : batch) {                                               \
       DCHECK(v.has_##PB_VAL_METHOD());                                                   \
-      values_.insert(v.PB_VAL_METHOD());                                                 \
+      values_.emplace(v.PB_VAL_METHOD());                                                \
     }                                                                                    \
   }
 
@@ -129,20 +158,9 @@ IN_LIST_FILTER_INSERT_BATCH(int16_t, TYPE_SMALLINT, short_val)
 IN_LIST_FILTER_INSERT_BATCH(int32_t, TYPE_INT, int_val)
 IN_LIST_FILTER_INSERT_BATCH(int64_t, TYPE_BIGINT, long_val)
 IN_LIST_FILTER_INSERT_BATCH(int64_t, TYPE_DATE, long_val)
-
-#define IN_LIST_FILTER_INSERT_STRING_BATCH(SLOT_TYPE)                                 \
-  template<>                                                                          \
-  void InListFilterImpl<StringValue, SLOT_TYPE>::InsertBatch(                         \
-      const ColumnValueBatchPB& batch) {                                              \
-    for (const ColumnValuePB& v : batch) {                                            \
-      DCHECK(v.has_string_val());                                                     \
-      values_.insert(StringValue(v.string_val()));                                    \
-    }                                                                                 \
-  }
-IN_LIST_FILTER_INSERT_STRING_BATCH(TYPE_STRING)
-IN_LIST_FILTER_INSERT_STRING_BATCH(TYPE_VARCHAR)
-IN_LIST_FILTER_INSERT_STRING_BATCH(TYPE_CHAR)
-
+IN_LIST_FILTER_INSERT_BATCH(StringValue, TYPE_STRING, string_val)
+IN_LIST_FILTER_INSERT_BATCH(StringValue, TYPE_VARCHAR, string_val)
+IN_LIST_FILTER_INSERT_BATCH(StringValue, TYPE_CHAR, string_val)
 
 #define NUMERIC_IN_LIST_FILTER_TO_PROTOBUF(TYPE, SLOT_TYPE, PB_VAL_METHOD)             \
   template<>                                                                           \
@@ -199,91 +217,5 @@ void InListFilterImpl<int64_t, TYPE_DATE>::ToOrcLiteralList(
 STRING_IN_LIST_FILTER_TO_ORC_LITERAL_LIST(TYPE_STRING)
 STRING_IN_LIST_FILTER_TO_ORC_LITERAL_LIST(TYPE_VARCHAR)
 STRING_IN_LIST_FILTER_TO_ORC_LITERAL_LIST(TYPE_CHAR)
-
-#define NUMERIC_IN_LIST_FILTER_DEBUG_STRING(TYPE, SLOT_TYPE) \
-template<>\
-string InListFilterImpl<TYPE, SLOT_TYPE>::DebugString() const noexcept { \
-  std::stringstream ss; \
-  bool first_value = true;\
-  ss << "IN-list filter: [";\
-    for (TYPE v : values_) { \
-      if (first_value) {\
-        first_value = false;\
-      } else {\
-        ss << ',';\
-      }\
-      ss << v;\
-    }\
-  if (contains_null_) {\
-    if (!first_value) ss << ',';\
-    ss << "NULL";\
-  }\
-  ss << ']';\
-  return ss.str();\
-}
-NUMERIC_IN_LIST_FILTER_DEBUG_STRING(int8_t, TYPE_TINYINT)
-NUMERIC_IN_LIST_FILTER_DEBUG_STRING(int16_t, TYPE_SMALLINT)
-NUMERIC_IN_LIST_FILTER_DEBUG_STRING(int32_t, TYPE_INT)
-NUMERIC_IN_LIST_FILTER_DEBUG_STRING(int64_t, TYPE_BIGINT)
-NUMERIC_IN_LIST_FILTER_DEBUG_STRING(int64_t, TYPE_DATE)
-
-#define STRING_IN_LIST_FILTER_DEBUG_STRING(SLOT_TYPE)   \
-  template<>                                                  \
-  string InListFilterImpl<StringValue, SLOT_TYPE>::DebugString() const noexcept { \
-    std::stringstream ss; \
-  bool first_value = true;\
-  ss << "IN-list filter: [";\
-    for (const StringValue &s : values_) {\
-      if (first_value) {\
-        first_value = false;\
-      } else {\
-        ss << ',';\
-      }\
-      ss << "\"" << s.DebugString() << "\""; \
-    }\
-  if (contains_null_) {\
-    if (!first_value) ss << ',';\
-    ss << "NULL";\
-  }\
-  ss << ']';\
-  return ss.str();\
-}
-STRING_IN_LIST_FILTER_DEBUG_STRING(TYPE_STRING)
-STRING_IN_LIST_FILTER_DEBUG_STRING(TYPE_VARCHAR)
-STRING_IN_LIST_FILTER_DEBUG_STRING(TYPE_CHAR)
-
-string InListFilter::DebugString(const InListFilterPB& filter) {
-  std::stringstream ss;
-  ss << "IN-list filter: " << DebugStringOfList(filter);
-  return ss.str();
-}
-
-string InListFilter::DebugStringOfList(const InListFilterPB& filter) {
-  std::stringstream ss;
-  ss << "[";
-  bool first_value = true;
-  for (const ColumnValuePB& v : filter.value()) {
-    if (first_value) {
-      first_value = false;
-    } else {
-      ss << ',';
-    }
-    if (v.has_byte_val()) {
-      ss << v.byte_val();
-    } else if (v.has_short_val()) {
-      ss << v.short_val();
-    } else if (v.has_int_val()) {
-      ss << v.int_val();
-    } else if (v.has_long_val()) {
-      ss << v.long_val();
-    } else if (v.has_date_val()) {
-      ss << v.date_val();
-    } else if (v.has_string_val()) {
-      ss << "\"" << v.string_val() << "\"";
-    }
-  }
-  ss << ']';
-  return ss.str();
-}
 
 } // namespace impala

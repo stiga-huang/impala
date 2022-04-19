@@ -39,13 +39,14 @@ int64_t InListFilterImpl<int64_t, TYPE_DATE>::GetValue(const void* val) {
       ++total_entries_;                                                               \
       if (UNLIKELY(total_entries_ > entry_limit_)) {                                  \
         always_true_ = true;                                                          \
+        contains_null_ = false;                                                       \
         values_.clear();                                                              \
       }                                                                               \
     }                                                                                 \
   }                                                                                   \
   template<>                                                                          \
-  bool InListFilterImpl<TYPE, SLOT_TYPE>::Find(void* val, const ColumnType& col_type) \
-      const noexcept {                                                                \
+  bool InListFilterImpl<TYPE, SLOT_TYPE>::Find(const void* val,                       \
+      const ColumnType& col_type) const noexcept {                                    \
     if (always_true_) return true;                                                    \
     if (val == nullptr) return contains_null_;                                        \
     return values_.find(GetValue(val)) != values_.end();                              \
@@ -81,6 +82,7 @@ StringValue InListFilterImpl<StringValue, TYPE_CHAR>::GetValue(const void* val,
         if (UNLIKELY(total_entries_ > entry_limit_                           \
             || str_total_size_ >= STRING_SET_MAX_TOTAL_LENGTH)) {            \
           always_true_ = true;                                               \
+          contains_null_ = false;                                            \
           values_.clear();                                                   \
           new_values_.clear();                                               \
           return;                                                            \
@@ -90,13 +92,13 @@ StringValue InListFilterImpl<StringValue, TYPE_CHAR>::GetValue(const void* val,
   }                                                                          \
                                                                              \
   template<>                                                                 \
-  bool InListFilterImpl<StringValue, SLOT_TYPE>::Find(void* val,             \
+  bool InListFilterImpl<StringValue, SLOT_TYPE>::Find(const void* val,       \
       const ColumnType& col_type) const noexcept {                           \
     if (always_true_) return true;                                           \
     if (val == nullptr) return contains_null_;                               \
     DCHECK_EQ(type_, col_type.type);                                         \
-    const StringValue* s = reinterpret_cast<const StringValue*>(val);        \
-    return values_.find(*s) != values_.end();                                \
+    StringValue s = GetValue(val, type_len_);                                \
+    return values_.find(s) != values_.end();                                 \
   }
 
 STRING_IN_LIST_FILTER_FUNCTIONS(TYPE_STRING)

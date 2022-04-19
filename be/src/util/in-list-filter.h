@@ -49,10 +49,10 @@ class InListFilter {
 
   /// Materialize filter values by copying any values stored by filters into memory owned
   /// by the filter. Filters may assume that the memory for Insert()-ed values stays valid
-  /// until this is called.
+  /// until this is called. Invoked after inserting a batch.
   virtual void MaterializeValues() {}
 
-  virtual std::string DebugString() const noexcept = 0;
+  std::string DebugString() const noexcept;
 
   bool ContainsNull() { return contains_null_; }
   bool AlwaysTrue() { return always_true_; }
@@ -62,7 +62,7 @@ class InListFilter {
   /// Makes this filter always return true.
   void SetAlwaysTrue() { always_true_ = true; }
 
-  virtual bool Find(void* val, const ColumnType& col_type) const noexcept = 0;
+  virtual bool Find(const void* val, const ColumnType& col_type) const noexcept = 0;
   virtual void InsertBatch(const ColumnValueBatchPB& batch) = 0;
   virtual int NumItems() const noexcept = 0;
   virtual void ToOrcLiteralList(std::vector<orc::Literal>* in_list) = 0;
@@ -81,14 +81,10 @@ class InListFilter {
   /// contains all elements, i.e. always true.
   static void ToProtobuf(const InListFilter* filter, InListFilterPB* protobuf);
 
-  /// Returns the LLVM_CLASS_NAME for this base class 'InListFilter'.
-  static const char* LLVM_CLASS_NAME;
-
   /// Return a debug string for 'filter'
   static std::string DebugString(const InListFilterPB& filter);
   /// Return a debug string for the list of the 'filter'
   static std::string DebugStringOfList(const InListFilterPB& filter);
-
  protected:
   friend class HdfsOrcScanner;
   virtual void ToProtobuf(InListFilterPB* protobuf) const = 0;
@@ -117,15 +113,13 @@ class InListFilterImpl : public InListFilter {
   void Insert(const void* val) override;
   void InsertBatch(const ColumnValueBatchPB& batch) override;
 
-  bool Find(void* val, const ColumnType& col_type) const noexcept override;
+  bool Find(const void* val, const ColumnType& col_type) const noexcept override;
 
   void ToProtobuf(InListFilterPB* protobuf) const override;
 
   void ToOrcLiteralList(std::vector<orc::Literal>* in_list) override {
     for (auto v : values_) in_list->emplace_back(static_cast<int64_t>(v));
   }
-
-  std::string DebugString() const noexcept override;
 
   inline static T GetValue(const void* val) {
     return *reinterpret_cast<const T*>(val);
@@ -155,11 +149,10 @@ class InListFilterImpl<StringValue, SLOT_TYPE> : public InListFilter {
   void Insert(const void* val) override;
   void InsertBatch(const ColumnValueBatchPB& batch) override;
   void MaterializeValues() override;
-  bool Find(void* val, const ColumnType& col_type) const noexcept override;
+  bool Find(const void* val, const ColumnType& col_type) const noexcept override;
 
   void ToProtobuf(InListFilterPB* protobuf) const override;
   void ToOrcLiteralList(std::vector<orc::Literal>* in_list) override;
-  std::string DebugString() const noexcept override;
 
   inline static StringValue GetValue(const void* val, int char_type_len) {
     return *reinterpret_cast<const StringValue*>(val);
