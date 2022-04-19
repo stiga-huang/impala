@@ -447,7 +447,7 @@ struct TQueryOptions {
 
   // See comment in ImpalaService.thrift
   104: optional set<PlanNodes.TRuntimeFilterType> enabled_runtime_filter_types =
-      [PlanNodes.TRuntimeFilterType.BLOOM, PlanNodes.TRuntimeFilterType.MIN_MAX, PlanNodes.TRuntimeFilterType.IN_LIST];
+      [PlanNodes.TRuntimeFilterType.BLOOM, PlanNodes.TRuntimeFilterType.MIN_MAX];
 
   // See comment in ImpalaService.thrift
   105: optional bool async_codegen = false;
