@@ -22,14 +22,21 @@
 # Supported environment variables:
 # JAVA_TOOL_OPTIONS: additional options passed to any embedded JVMs. Can be used, e.g.
 #                    to set a max heap size with JAVA_TOOL_OPTIONS="-Xmx4g".
+# USE_JAVA11: set to true to run the process using Java 11. Defaults to false.
 
 export IMPALA_HOME=/opt/impala
 
 # Add directories containing dynamic libraries required by the daemons that
 # are not on the system library paths.
 export LD_LIBRARY_PATH=/opt/impala/lib
-LD_LIBRARY_PATH+=:/usr/lib/jvm/java-8-openjdk-amd64/jre/lib/amd64/
-LD_LIBRARY_PATH+=:/usr/lib/jvm/java-8-openjdk-amd64/jre/lib/amd64/server/
+
+if [[ "$USE_JAVA11" == "true" ]]; then
+  LD_LIBRARY_PATH+=:/usr/lib/jvm/java-11-openjdk-amd64/jre/lib/amd64/
+  LD_LIBRARY_PATH+=:/usr/lib/jvm/java-11-openjdk-amd64/jre/lib/amd64/server/
+else
+  LD_LIBRARY_PATH+=:/usr/lib/jvm/java-8-openjdk-amd64/jre/lib/amd64/
+  LD_LIBRARY_PATH+=:/usr/lib/jvm/java-8-openjdk-amd64/jre/lib/amd64/server/
+fi
 
 # Add directory with optional plugins that can be mounted for the container.
 LD_LIBRARY_PATH+=:/opt/impala/lib/plugins

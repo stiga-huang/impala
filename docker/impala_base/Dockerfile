@@ -19,7 +19,7 @@ FROM ${BASE_IMAGE}
 
 # Install minimal dependencies required for Impala services to run.
 RUN apt-get update && \
-  apt-get install -y openjdk-8-jre-headless \
+  apt-get install -y openjdk-8-jre-headless openjdk-11-jre-headless\
   libsasl2-2 libsasl2-modules libsasl2-modules-gssapi-mit \
   sudo netcat-openbsd less curl iproute2 vim iputils-ping \
   tzdata krb5-user && \
