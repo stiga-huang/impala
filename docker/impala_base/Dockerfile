@@ -17,7 +17,7 @@
 ARG BASE_IMAGE=ubuntu:16.04
 FROM ${BASE_IMAGE}
 
-add-apt-repository ppa:openjdk-r/ppa
+RUN add-apt-repository ppa:openjdk-r/ppa
 
 # Install minimal dependencies required for Impala services to run.
 RUN apt-get update && \
