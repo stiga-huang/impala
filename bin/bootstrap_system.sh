@@ -219,7 +219,7 @@ ubuntu apt-get --yes install ccache curl gawk g++ gcc libffi-dev \
         libkrb5-dev krb5-admin-server krb5-kdc krb5-user libsasl2-dev \
         libsasl2-modules libsasl2-modules-gssapi-mit libssl-dev make ninja-build \
         python-dev python-setuptools postgresql ssh wget vim-common psmisc \
-        lsof openjdk-8-jdk openjdk-8-source openjdk-8-dbg apt-utils git ant
+        lsof openjdk-11-jdk openjdk-8-jdk openjdk-8-source openjdk-8-dbg apt-utils git ant
 # Required by Kudu in the minicluster
 ubuntu20 apt-get --yes install libtinfo5
 ARCH_NAME=$(uname -p)
