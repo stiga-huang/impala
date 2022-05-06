@@ -681,12 +681,11 @@ public final class RuntimeFilterGenerator {
     private void calculateFilterSize(FilterSizeLimits filterSizeLimits) {
       if (type_ == TRuntimeFilterType.MIN_MAX) return;
       if (type_ == TRuntimeFilterType.IN_LIST) {
-        Type colType = srcExpr_.getType();
-        if (colType.isStringType()) {
+        if (srcExpr_.getType().isStringType()) {
           filterSizeBytes_ = IN_LIST_FILTER_STRING_SET_MAX_TOTAL_LENGTH;
         } else {
-          filterSizeBytes_ =
-              filterSizeLimits.inListFilterEntryLimit * colType.getSlotSize();
+          // We currently use int64_t(8 bytes) as entry items for all numeric types.
+          filterSizeBytes_ = filterSizeLimits.inListFilterEntryLimit * 8;
         }
         return;
       }
