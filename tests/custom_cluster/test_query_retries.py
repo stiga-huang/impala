@@ -31,7 +31,7 @@ from random import randint
 
 from RuntimeProfile.ttypes import TRuntimeProfileFormat
 from tests.beeswax.impala_beeswax import ImpalaBeeswaxException
-from tests.common.impala_test_suite import ImpalaTestSuite
+from tests.common.impala_test_suite import ImpalaTestSuite, LOG
 from tests.common.custom_cluster_test_suite import CustomClusterTestSuite
 from tests.common.errors import Timeout
 from tests.common.skip import SkipIfEC, SkipIfBuildType, SkipIfGCS, SkipIfCOS
@@ -976,7 +976,9 @@ class TestQueryRetries(CustomClusterTestSuite):
     start_time = time.time()
     retry_status = __get_retry_status()
     while retry_status != retry_state and time.time() - start_time < timeout:
+      LOG.info("{0} != {1}. Will wait 0.5s".format(retry_status, retry_state))
       retry_status = __get_retry_status()
+      LOG.info("Update state to {0}".format(retry_status))
       time.sleep(0.5)
     if retry_status != retry_state:
       raise Timeout("query {0} was not retried within timeout".format
