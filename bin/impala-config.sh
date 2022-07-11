@@ -205,7 +205,7 @@ export CDP_GCS_VERSION=2.1.2.7.2.15.0-88
 # Ref: https://infra.apache.org/release-download-pages.html#closer
 : ${APACHE_MIRROR:="https://www.apache.org/dyn/closer.cgi"}
 export APACHE_MIRROR
-export APACHE_HIVE_VERSION=3.1.2
+export APACHE_HIVE_VERSION=3.1.3
 export APACHE_HIVE_STORAGE_API_VERSION=2.7.0
 
 export ARCH_NAME=$(uname -p)
