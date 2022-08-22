@@ -25,12 +25,6 @@ set(NO_TESTS 1)
 project(Impala)
 
 option(BUILD_PACKAGES "Build installater packages")
-#TODO: make sure version info is generated
-file(READ "bin/version.info" version_file)
-if(${version_file} MATCHES "VERSION: ([0-9][0-9]?\\.[0-9][0-9]?\\.[0-9][0-9]?[^ \t\r\n]*)")
-  message (STATUS "ver=${CMAKE_MATCH_1}")
-  set(IMPALA_VERSION ${CMAKE_MATCH_1})
-endif()
 
 include(cmake_modules/kudu_cmake_fns.txt)
 
@@ -465,7 +459,7 @@ set(CMAKE_INSTALL_PREFIX "/opt")
 set(IMPALA_INSTALLDIR "impala" CACHE INTERNAL "")
 
 install(DIRECTORY "www/" DESTINATION ${IMPALA_INSTALLDIR}/www)
-install(FILES fe/target/impala-frontend-${IMPALA_VERSION}.jar
+install(FILES fe/target/impala-frontend-$ENV{IMPALA_VERSION}.jar
   DESTINATION ${IMPALA_INSTALLDIR}/jar)
 
 FILE(GLOB hdfs_lib ${HDFS_LIB_PATHS}/libhdfs.so*)
@@ -488,7 +482,7 @@ install(FILES ${kudu_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
 install(DIRECTORY fe/target/dependency/ DESTINATION ${IMPALA_INSTALLDIR}/jar
         FILES_MATCHING
           PATTERN "*.jar")
-install(DIRECTORY shell/build/impala-shell-${IMPALA_VERSION}/ DESTINATION ${IMPALA_INSTALLDIR}/shell
+install(DIRECTORY shell/build/impala-shell-$ENV{IMPALA_VERSION}/ DESTINATION ${IMPALA_INSTALLDIR}/shell
         USE_SOURCE_PERMISSIONS PATTERN "*.pyc" EXCLUDE)
 
 # Build target for all generated files which most backend code depends on
@@ -563,7 +557,7 @@ if (BUILD_PACKAGES)
     set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "An open source massively parallel processing SQL query engine.")
     set(CPACK_PACKAGE_CONTACT "Maintainer: dev@impala.apache.org")
     set(CPACK_PACKAGE_HOMEPAGE_URL "https://impala.apache.org")
-    set(CPACK_PACKAGE_VERSION "${IMPALA_VERSION}")
+    set(CPACK_PACKAGE_VERSION "$ENV{IMPALA_VERSION}")
     set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}_$ENV{IMPALA_HADOOP_VERSION}-${CMAKE_SYSTEM_PROCESSOR}")
     set(CPACK_RPM_PACKAGE_LICENSE "ASL-2.0")
     set(CPACK_STRIP_FILES ${IMPALA_INSTALLDIR}/bin/impalad)
