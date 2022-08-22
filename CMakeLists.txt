@@ -480,10 +480,13 @@ FILE(GLOB kudu_lib ${KUDU_HOME}/lib/libkudu_client.so*)
 install(FILES ${kudu_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
 
 install(DIRECTORY fe/target/dependency/ DESTINATION ${IMPALA_INSTALLDIR}/jar
-        FILES_MATCHING
-          PATTERN "*.jar")
+  FILES_MATCHING PATTERN "*.jar")
 install(DIRECTORY shell/build/impala-shell-$ENV{IMPALA_VERSION}/ DESTINATION ${IMPALA_INSTALLDIR}/shell
-        USE_SOURCE_PERMISSIONS PATTERN "*.pyc" EXCLUDE)
+  USE_SOURCE_PERMISSIONS PATTERN "*.pyc" EXCLUDE)
+
+install(DIRECTORY bin/deploy/ DESTINATION ${IMPALA_INSTALLDIR}/bin
+  USE_SOURCE_PERMISSIONS FILES_MATCHING PATTERN "*.sh")
+install(DIRECTORY fe/src/test/resources/deploy/ DESTINATION ${IMPALA_INSTALLDIR}/conf)
 
 # Build target for all generated files which most backend code depends on
 add_custom_target(gen-deps ALL DEPENDS thrift-deps proto-deps fb-deps
