@@ -445,6 +445,10 @@ else()
   set_property(GLOBAL PROPERTY RULE_LAUNCH_CUSTOM ${JUNITXML_WRAPPER})
 endif()
 
+## installation path
+set(CMAKE_INSTALL_PREFIX "/opt")
+set(IMPALA_INSTALLDIR "impala" CACHE INTERNAL "")
+
 # compile these subdirs using their own CMakeLists.txt
 add_subdirectory(common/function-registry)
 add_subdirectory(common/thrift)
@@ -453,10 +457,6 @@ add_subdirectory(common/protobuf)
 add_subdirectory(be)
 add_subdirectory(docker)
 add_subdirectory(java)
-
-## installation path
-set(CMAKE_INSTALL_PREFIX "/opt")
-set(IMPALA_INSTALLDIR "impala" CACHE INTERNAL "")
 
 install(DIRECTORY "www/" DESTINATION ${IMPALA_INSTALLDIR}/www)
 install(FILES fe/target/impala-frontend-$ENV{IMPALA_VERSION}.jar
