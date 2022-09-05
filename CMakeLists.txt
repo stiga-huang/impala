@@ -24,6 +24,8 @@ set(NO_TESTS 1)
 # initialized.
 project(Impala)
 
+option(BUILD_PACKAGES "Build deployment packages")
+
 include(cmake_modules/kudu_cmake_fns.txt)
 
 if (NOT DEFINED BUILD_SHARED_LIBS)
@@ -484,6 +486,10 @@ else()
   set_property(GLOBAL PROPERTY RULE_LAUNCH_CUSTOM ${JUNITXML_WRAPPER})
 endif()
 
+## installation path
+set(CMAKE_INSTALL_PREFIX "/opt")
+set(IMPALA_INSTALLDIR "impala" CACHE INTERNAL "")
+
 # compile these subdirs using their own CMakeLists.txt
 add_subdirectory(common/function-registry)
 add_subdirectory(common/thrift)
@@ -493,6 +499,31 @@ add_subdirectory(be)
 add_subdirectory(docker)
 add_subdirectory(java)
 add_subdirectory(shell)
+
+install(DIRECTORY "www/" DESTINATION ${IMPALA_INSTALLDIR}/www)
+install(FILES fe/target/impala-frontend-$ENV{IMPALA_VERSION}.jar
+  DESTINATION ${IMPALA_INSTALLDIR}/jar)
+
+set(IMPALA_GCC_HOME $ENV{IMPALA_TOOLCHAIN_PACKAGES_HOME}/gcc-$ENV{IMPALA_GCC_VERSION})
+FILE(GLOB gcc_lib ${IMPALA_GCC_HOME}/lib64/libgcc_s.so.1*)
+install(FILES ${gcc_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
+
+FILE(GLOB cpp_lib ${IMPALA_GCC_HOME}/lib64/libstdc++.so.6*)
+install(FILES ${cpp_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
+
+set(KUDU_HOME $ENV{IMPALA_TOOLCHAIN_PACKAGES_HOME}/kudu-$ENV{IMPALA_KUDU_VERSION}/release)
+# The parent folder is lib64 on centos/redhat, while on ubuntu it's lib.
+FILE(GLOB kudu_lib ${KUDU_HOME}/lib*/libkudu_client.so*)
+install(FILES ${kudu_lib} DESTINATION ${IMPALA_INSTALLDIR}/lib)
+
+install(DIRECTORY fe/target/dependency/ DESTINATION ${IMPALA_INSTALLDIR}/jar
+  FILES_MATCHING PATTERN "*.jar")
+install(DIRECTORY shell/build/impala-shell-$ENV{IMPALA_VERSION}/ DESTINATION ${IMPALA_INSTALLDIR}/shell
+  USE_SOURCE_PERMISSIONS PATTERN "*.pyc" EXCLUDE)
+
+install(DIRECTORY package/bin/ DESTINATION ${IMPALA_INSTALLDIR}/bin
+  USE_SOURCE_PERMISSIONS FILES_MATCHING PATTERN "*.sh")
+install(DIRECTORY package/conf/ DESTINATION ${IMPALA_INSTALLDIR}/conf)
 
 # Build target for all generated files which most backend code depends on
 add_custom_target(gen-deps ALL DEPENDS thrift-deps proto-deps fb-deps
@@ -542,3 +573,63 @@ if (DUMP_INCLUDE_PATHS)
 endif(DUMP_INCLUDE_PATHS)
 
 SET(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -stdlib=libstdc++")
+
+# packaging
+if (BUILD_PACKAGES)
+
+  if (EXISTS "/etc/redhat-release")
+    set(IMPALA_LINUX_ID_FILE "/etc/redhat-release")
+  elseif (EXISTS "/etc/os-release")
+    set(IMPALA_LINUX_ID_FILE "/etc/os-release")
+  elseif (EXISTS "/etc/issue")
+    set(IMPALA_LINUX_ID_FILE "/etc/issue")
+  else()
+    message(FATAL_ERROR "Can not determine OS version!")
+  endif()
+  file(READ ${IMPALA_LINUX_ID_FILE} IMPALA_OS_INFO)
+
+  string(TOLOWER ${IMPALA_OS_INFO} IMPALA_OS_INFO)
+  if (${IMPALA_OS_INFO} MATCHES "(redhat|centos)")
+    set(CPACK_GENERATOR "RPM")
+  elseif (${IMPALA_OS_INFO} MATCHES "ubuntu")
+    set(CPACK_GENERATOR "DEB")
+  else()
+    message(WARNING "OS is ${IMPALA_OS_INFO}. No packages will be generated.")
+  endif()
+
+  if (CPACK_GENERATOR)
+    message(STATUS "Packaging enabled: ${CPACK_GENERATOR}")
+    set(CPACK_PACKAGE_NAME ${CMAKE_PROJECT_NAME})
+    set(CPACK_PACKAGE_VENDOR "Apache")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "An open source massively parallel processing SQL query engine.")
+    set(CPACK_PACKAGE_CONTACT "dev@impala.apache.org")
+    set(CPACK_PACKAGE_HOMEPAGE_URL "https://impala.apache.org")
+    set(CPACK_PACKAGE_VERSION "$ENV{IMPALA_VERSION}")
+    set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}_hive-$ENV{IMPALA_HIVE_VERSION}-${CMAKE_SYSTEM_PROCESSOR}")
+    set(CPACK_RPM_PACKAGE_LICENSE "ASL-2.0")
+
+    if ($ENV{STRIP_DEPLOYMENT_IMPALAD})
+      set(CPACK_STRIP_FILES ${IMPALA_INSTALLDIR}/bin/impalad)
+      message("Binaries in the package will be stripped")
+    endif()
+
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/opt")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "impala")
+
+    set(CPACK_RPM_PACKAGE_AUTOREQPROV " no")
+    set(CPACK_RPM_PACKAGE_RELOCATABLE TRUE)
+    set(CPACK_RPM_PACKAGE_REQUIRES
+        "cyrus-sasl-gssapi, cyrus-sasl-plain, krb5-workstation, openldap-devel, tzdata")
+
+    # libsasl2-modules-gssapi-mit will include dependencies on libsasl2-modules, libc6, libgssapi-krb5-2, libssl1.1
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS
+        "libsasl2-modules-gssapi-mit (>= $ENV{IMPALA_CYRUS_SASL_VERSION})")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS
+        "${CPACK_DEBIAN_PACKAGE_DEPENDS}, libsasl2-2 (>= $ENV{IMPALA_CYRUS_SASL_VERSION})")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS
+        "${CPACK_DEBIAN_PACKAGE_DEPENDS}, language-pack-en, tzdata")
+  endif()
+
+include(CPack)
+
+endif()

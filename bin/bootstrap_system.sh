@@ -243,7 +243,7 @@ ubuntu sudo update-java-alternatives -s \
 redhat sudo yum install -y curl gawk gcc gcc-c++ git krb5-devel krb5-server \
         krb5-workstation libevent-devel libffi-devel make openssl-devel cyrus-sasl \
         cyrus-sasl-gssapi cyrus-sasl-devel cyrus-sasl-plain \
-        postgresql postgresql-server \
+        postgresql postgresql-server rpm-build \
         wget vim-common nscd cmake fuse-devel zlib-devel \
         psmisc lsof openssh-server redhat-lsb python3-devel python3-setuptools \
         net-tools langpacks-en glibc-langpack-en libxml2-devel libxslt-devel \
