@@ -640,6 +640,7 @@ endif()
 
 set(LLVM_IR_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/llvm-ir")
 file(MAKE_DIRECTORY ${LLVM_IR_OUTPUT_DIRECTORY})
+install(DIRECTORY ${LLVM_IR_OUTPUT_DIRECTORY} DESTINATION ${IMPALA_INSTALLDIR}/)
 
 # Add custom target to only build the backend tests
 # Note: this specifies "ALL" so it builds if running "make" with no arguments. This is
