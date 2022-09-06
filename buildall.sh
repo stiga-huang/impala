@@ -431,6 +431,13 @@ bootstrap_dependencies() {
   else
     echo ">>> Downloading and extracting toolchain dependencies."
     "$IMPALA_HOME/bin/bootstrap_toolchain.py"
+    if [[ "$(uname -p)" = "aarch64" ]]; then
+      if ! [[ -d "$IMPALA_HOME/../hadoopAarch64NativeLibs" ]]; then
+        git clone https://github.com/zhaorenhai/hadoopAarch64NativeLibs \
+          "$IMPALA_HOME/../hadoopAarch64NativeLibs"
+      fi
+      cp $IMPALA_HOME/../hadoopAarch64NativeLibs/lib* $HADOOP_HOME/lib/native/
+    fi
     echo "Toolchain bootstrap complete."
   fi
   if [[ "${USE_APACHE_HIVE}" = true ]]; then
