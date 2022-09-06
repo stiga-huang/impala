@@ -148,6 +148,9 @@ def wget_and_unpack_package(download_path, file_name, destination, wget_no_clobb
                 "--directory={0}".format(destination)])
   os.unlink(os.path.join(destination, file_name))
 
+def can_download(download_path):
+  stdout = check_output(["wget", "-S", "--spider", download_path, "2>&1"])
+  return "Remote file exists" in stdout
 
 class DownloadUnpackTarball(object):
   """
@@ -196,6 +199,11 @@ class DownloadUnpackTarball(object):
     if self.makedir:
       os.rename(download_dir, unpack_dir)
 
+  def can_download(self):
+    """Check whether the package URL is valid, i.e. whether the package exists on
+       the remote storage
+    """
+    pass
 
 class TemplatedDownloadUnpackTarball(DownloadUnpackTarball):
   def __init__(self, url_tmpl, archive_name_tmpl, destination_basedir_tmpl,
@@ -270,6 +278,8 @@ class ToolchainPackage(EnvVersionedPackage):
                      'toolchain_build_id': toolchain_build_id,
                      'toolchain_host': toolchain_host}
     archive_basename_tmpl = "${name}-${version}-${compiler}-${label}"
+    if platform.processor() == "aarch64":
+      archive_basename_tmpl += "-aarch64"
     url_prefix_tmpl = "https://${toolchain_host}/build/${toolchain_build_id}/" + \
         "${name}/${version}-${compiler}/"
     unpack_directory_tmpl = "${name}-${version}"
@@ -551,12 +561,10 @@ def main():
   downloads = []
   if os.getenv("SKIP_TOOLCHAIN_BOOTSTRAP", "false") != "true":
     downloads += get_toolchain_downloads()
-  kudu_download = None
   if os.getenv("DOWNLOAD_CDH_COMPONENTS", "false") == "true":
     create_directory_from_env_var("CDP_COMPONENTS_HOME")
     create_directory_from_env_var("APACHE_COMPONENTS_HOME")
-    if platform.processor() != "aarch64":
-      downloads += get_kudu_downloads()
+    downloads += get_kudu_downloads()
     downloads += get_hadoop_downloads()
 
   components_needing_download = [d for d in downloads if d.needs_download()]

@@ -485,28 +485,3 @@ echo -e "\n$SET_JAVA_HOME" >> "${IMPALA_HOME}/bin/impala-config-local.sh"
 eval "$SET_JAVA_HOME"
 # Assert that we have a java available
 test -f $JAVA_HOME/bin/java
-
-if [[ $ARCH_NAME == 'aarch64' ]]; then
-  echo -e "\nexport SKIP_TOOLCHAIN_BOOTSTRAP=true" >> \
-    "${IMPALA_HOME}/bin/impala-config-local.sh"
-  SET_TOOLCHAIN_HOME="export NATIVE_TOOLCHAIN_HOME=${IMPALA_HOME}/../native-toolchain"
-  echo -e "\n$SET_TOOLCHAIN_HOME" >> ~/.bashrc
-  echo -e "\n$SET_TOOLCHAIN_HOME" >> "${IMPALA_HOME}/bin/impala-config-local.sh"
-  eval "$SET_TOOLCHAIN_HOME"
-  if ! [[ -d "$NATIVE_TOOLCHAIN_HOME" ]]; then
-    time -p git clone -b asf-impala-4.1 https://github.com/cloudera/native-toolchain/ \
-      "$NATIVE_TOOLCHAIN_HOME"
-  fi
-  cd "$NATIVE_TOOLCHAIN_HOME"
-  git pull
-  echo "Begin build tool chain, may need several hours, please be patient...."
-  sudo chmod 755 ~/.cache
-  ./buildall.sh
-  cd -
-  mkdir -p ${IMPALA_HOME}/toolchain
-fi
-
-# Try to prepopulate the m2 directory to save time
-if ! bin/jenkins/populate_m2_directory.py ; then
-  echo "Failed to prepopulate the m2 directory. Continuing..."
-fi
