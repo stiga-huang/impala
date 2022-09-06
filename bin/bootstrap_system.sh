@@ -488,14 +488,13 @@ if [[ $ARCH_NAME == 'aarch64' ]]; then
   echo -e "\n$SET_TOOLCHAIN_HOME" >> "${IMPALA_HOME}/bin/impala-config-local.sh"
   eval "$SET_TOOLCHAIN_HOME"
   if ! [[ -d "$NATIVE_TOOLCHAIN_HOME" ]]; then
-    time -p git clone https://github.com/cloudera/native-toolchain/ \
+    time -p git clone --single-branch -b master-arm https://github.com/stiga-huang/native-toolchain/ \
       "$NATIVE_TOOLCHAIN_HOME"
   fi
   cd "$NATIVE_TOOLCHAIN_HOME"
-  git pull
   echo "Begin build tool chain, may need several hours, please be patient...."
   sudo chmod 755 ~/.cache
-  ./buildall.sh
+  DOWNLOAD_CCACHE=0 ./buildall.sh
   cd -
   mkdir -p ${IMPALA_HOME}/toolchain
 fi
