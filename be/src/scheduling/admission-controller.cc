@@ -45,6 +45,9 @@
 
 using namespace strings;
 
+DECLARE_bool(is_coordinator);
+DECLARE_bool(is_executor);
+
 DEFINE_int64(queue_wait_timeout_ms, 60 * 1000, "Maximum amount of time (in "
     "milliseconds) that a request will wait to be admitted before timing out.");
 
@@ -660,9 +663,14 @@ Status AdmissionController::Init() {
   auto cb = [this](
       const StatestoreSubscriber::TopicDeltaMap& state,
       vector<TTopicDelta>* topic_updates) { UpdatePoolStats(state, topic_updates); };
+  string filter_prefix = "";
+  // Don't send back the updates to executors.
+  if (FLAGS_is_executor && !FLAGS_is_coordinator) {
+    filter_prefix = "!";
+  }
   Status status = subscriber_->AddTopic(Statestore::IMPALA_REQUEST_QUEUE_TOPIC,
       /* is_transient=*/true, /* populate_min_subscriber_topic_version=*/false,
-      /* filter_prefix=*/"", cb);
+      filter_prefix, cb);
   if (!status.ok()) {
     status.AddDetail("AdmissionController failed to register request queue topic");
   }
