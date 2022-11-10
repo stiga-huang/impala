@@ -220,7 +220,7 @@ ubuntu apt-get --yes install ccache curl gawk g++ gcc apt-utils git libffi-dev \
         libsasl2-modules libsasl2-modules-gssapi-mit libssl-dev make ninja-build \
         python-dev python-setuptools python3-dev python3-setuptools postgresql \
         ssh wget vim-common psmisc lsof openjdk-8-jdk openjdk-8-source openjdk-8-dbg \
-        net-tools language-pack-en
+        net-tools language-pack-en libxml2-dev libxslt-dev
 # Required by Kudu in the minicluster
 ubuntu20 apt-get --yes install libtinfo5
 ARCH_NAME=$(uname -p)
