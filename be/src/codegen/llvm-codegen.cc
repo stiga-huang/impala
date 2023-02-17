@@ -34,6 +34,7 @@
 #include <llvm/Bitcode/BitcodeWriter.h>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/ExecutionEngine/MCJIT.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DiagnosticInfo.h>
@@ -1315,6 +1316,15 @@ Status LlvmCodeGen::FinalizeModule() {
     GenerateFunctionNamesHashCode();
     DCHECK(!cache_key.empty());
     if (LookupCache(cache_key)) return Status::OK();
+  }
+
+  for (auto& func : *module_) {
+    llvm::AttrBuilder new_attrs;
+    new_attrs.addAttribute("no-frame-pointer-elim", "true");
+    auto attrs = func.getAttributes();
+    attrs = attrs.addAttributes(module_->getContext(),
+        llvm::AttributeList::FunctionIndex, new_attrs);
+    func.setAttributes(attrs);
   }
 
   if (optimizations_enabled_ && !FLAGS_disable_optimization_passes) {
