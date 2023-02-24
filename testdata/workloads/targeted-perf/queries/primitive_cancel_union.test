@@ -7,12 +7,12 @@
 --  query typically completes in under a second.
 select * from (
   select c_custkey key, min(c_name)
-  from tpch_parquet.customer
+  from customer
   where c_custkey <= 10
   group by c_custkey
   union all
   select l_orderkey, min(l_comment)
-  from tpch_parquet.lineitem
+  from lineitem
   group by l_orderkey) v
   limit 10
 ---- RESULTS
