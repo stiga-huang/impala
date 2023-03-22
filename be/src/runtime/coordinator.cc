@@ -813,7 +813,9 @@ void Coordinator::HandleExecStateTransition(
   }
   ReleaseQueryAdmissionControlResources();
   // Once the query has released its admission control resources, update its end time.
-  parent_request_state_->UpdateEndTime();
+  // For DML statements, we still need to update HMS after the query finishes. So the
+  // end time of DML is set in ClientRequestState::Wait().
+  if (stmt_type_ == TStmtType::QUERY) parent_request_state_->UpdateEndTime();
   // Can compute summary only after we stop accepting reports from the backends. Both
   // WaitForBackends() and CancelBackends() ensures that.
   // TODO: should move this off of the query execution path?
@@ -947,7 +949,7 @@ Status Coordinator::Wait() {
     RETURN_IF_ERROR(UpdateExecState(FinalizeResultSink(), nullptr, FLAGS_hostname));
   }
 
-  // DML requests are finished at this point.
+  // DML queries are finished at this point.
   RETURN_IF_ERROR(SetNonErrorTerminalState(ExecState::RETURNED_RESULTS));
   query_profile_->AddInfoString(
       "DML Stats", dml_exec_state_.OutputPartitionStats("\n"));

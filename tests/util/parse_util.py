@@ -102,6 +102,15 @@ def parse_duration_string_ms(duration):
   return (times['h'] * 60 * 60 + times['m'] * 60 + times['s']) * 1000 + times['ms']
 
 
+def get_duration_us_from_str(start_time_str, end_time_str):
+  """Parses the start/end time strings got in profile and returns the duration in us"""
+  # Ignore the last 3 digits of nanoseconds
+  start_time = datetime.strptime(start_time_str[:-3], '%Y-%m-%d %H:%M:%S.%f')
+  end_time = datetime.strptime(end_time_str[:-3], '%Y-%m-%d %H:%M:%S.%f')
+  delta = end_time - start_time
+  return delta.seconds * 1000000 + delta.microseconds
+
+
 def match_memory_estimate(explain_lines):
   """
   Given a list of strings from EXPLAIN output, find the estimated memory needed. This is

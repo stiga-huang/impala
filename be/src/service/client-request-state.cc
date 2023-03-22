@@ -1130,6 +1130,7 @@ void ClientRequestState::Wait() {
       query_events()->MarkEvent("Rows available");
     } else {
       query_events()->MarkEvent("Request finished");
+      UpdateEndTime();
     }
     discard_result(UpdateQueryStatus(status));
   }
@@ -1509,6 +1510,9 @@ Status ClientRequestState::UpdateCatalog() {
     TUpdateCatalogRequest catalog_update;
     catalog_update.__set_sync_ddl(exec_request_->query_options.sync_ddl);
     catalog_update.__set_header(GetCatalogServiceRequestHeader());
+    if (exec_request_->query_options.__isset.debug_action) {
+      catalog_update.__set_debug_action(exec_request_->query_options.debug_action);
+    }
     DmlExecState* dml_exec_state = GetCoordinator()->dml_exec_state();
     if (!dml_exec_state->PrepareCatalogUpdate(&catalog_update)) {
       VLOG_QUERY << "No partitions altered, not updating metastore (query id: "
