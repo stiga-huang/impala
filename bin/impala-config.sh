@@ -81,7 +81,7 @@ export USE_APACHE_HIVE=${USE_APACHE_HIVE-false}
 # moving to a different build of the toolchain, e.g. when a version is bumped or a
 # compile option is changed. The build id can be found in the output of the toolchain
 # build jobs, it is constructed from the build number and toolchain git hash prefix.
-export IMPALA_TOOLCHAIN_BUILD_ID=263-08db28d36a
+export IMPALA_TOOLCHAIN_BUILD_ID=264-810fd916d3
 # Versions of toolchain dependencies.
 # -----------------------------------
 export IMPALA_AVRO_VERSION=1.7.4-p5
