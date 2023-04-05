@@ -195,6 +195,7 @@ class RequestContext {
   }
 
   void set_read_timer(RuntimeProfile::Counter* read_timer) { read_timer_ = read_timer; }
+  void set_debug_timer(RuntimeProfile::Counter* debug_timer) { debug_timer_ = debug_timer; }
 
   void set_open_file_timer(RuntimeProfile::Counter* open_file_timer) {
     open_file_timer_ = open_file_timer;
@@ -373,6 +374,7 @@ class RequestContext {
 
   /// Total time spent in hdfs reading
   RuntimeProfile::Counter* read_timer_ = nullptr;
+  RuntimeProfile::Counter* debug_timer_ = nullptr;
 
   /// Total time spent open hdfs file handles
   RuntimeProfile::Counter* open_file_timer_ = nullptr;

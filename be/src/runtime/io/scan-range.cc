@@ -69,6 +69,8 @@ bool ScanRange::EnqueueReadyBuffer(unique_ptr<BufferDescriptor> buffer) {
 }
 
 Status ScanRange::GetNext(unique_ptr<BufferDescriptor>* buffer) {
+  VLOG_QUERY << "ScanRange::GetNext " << DebugString();
+  wait_start_time_ns_ = MonotonicStopWatch::Now();
   DCHECK(*buffer == nullptr);
   bool eosr;
   {
@@ -94,6 +96,7 @@ Status ScanRange::GetNext(unique_ptr<BufferDescriptor>* buffer) {
   if (eosr) reader_->RemoveActiveScanRange(this);
   // Update tracking counters. The buffer has now moved from the IoMgr to the caller.
   buffer_manager_->add_buffers_in_reader(1);
+  wait_start_time_ns_ = -1;
   return Status::OK();
 }
 
@@ -293,6 +296,10 @@ ReadOutcome ScanRange::DoReadInternal(DiskQueue* queue, int disk_id, bool use_lo
 }
 
 ReadOutcome ScanRange::DoRead(DiskQueue* queue, int disk_id) {
+  if (wait_start_time_ns_ > 0) {
+    reader_->debug_timer_->Add(MonotonicStopWatch::Now() - wait_start_time_ns_);
+    wait_start_time_ns_ = -1;
+  }
   bool use_local_buffer = false;
   bool use_mem_buffer = false;
   if (disk_file_ != nullptr && disk_file_->disk_type() != DiskFileType::LOCAL

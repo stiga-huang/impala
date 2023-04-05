@@ -74,6 +74,7 @@ using namespace impala::io;
 using namespace strings;
 
 namespace impala {
+PROFILE_DEFINE_TIMER(DebugTime, STABLE_LOW, "Time in a debug scope");
 PROFILE_DEFINE_TIMER(TotalRawHdfsReadTime, STABLE_LOW, "Aggregate wall clock time"
     " across all Disk I/O threads in HDFS read operations.");
 PROFILE_DEFINE_TIMER(TotalRawHdfsOpenFileTime, STABLE_LOW, "Aggregate wall clock time"
@@ -579,6 +580,7 @@ Status HdfsScanNodeBase::Open(RuntimeState* state) {
 
   // Initialize HdfsScanNode specific counters
   hdfs_read_timer_ = PROFILE_TotalRawHdfsReadTime.Instantiate(runtime_profile());
+  debug_timer_ = PROFILE_DebugTime.Instantiate(runtime_profile());
   hdfs_open_file_timer_ =
       PROFILE_TotalRawHdfsOpenFileTime.Instantiate(runtime_profile());
   per_read_thread_throughput_counter_ =
@@ -605,6 +607,7 @@ Status HdfsScanNodeBase::Open(RuntimeState* state) {
 
   reader_context_->set_bytes_read_counter(bytes_read_counter());
   reader_context_->set_read_timer(hdfs_read_timer_);
+  reader_context_->set_debug_timer(debug_timer_);
   reader_context_->set_open_file_timer(hdfs_open_file_timer_);
   reader_context_->set_active_read_thread_counter(&active_hdfs_read_thread_counter_);
   reader_context_->set_disks_accessed_bitmap(&disks_accessed_bitmap_);

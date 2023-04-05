@@ -809,6 +809,7 @@ class HdfsScanNodeBase : public ScanNode {
   RuntimeProfile::Counter* per_read_thread_throughput_counter_ = nullptr;
   RuntimeProfile::Counter* num_disks_accessed_counter_ = nullptr;
   RuntimeProfile::Counter* hdfs_read_timer_ = nullptr;
+  RuntimeProfile::Counter* debug_timer_ = nullptr;
   RuntimeProfile::Counter* hdfs_open_file_timer_ = nullptr;
   RuntimeProfile::SummaryStatsCounter* initial_range_ideal_reservation_stats_ = nullptr;
   RuntimeProfile::SummaryStatsCounter* initial_range_actual_reservation_stats_ = nullptr;

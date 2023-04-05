@@ -170,6 +170,8 @@ class RequestRange : public InternalQueue<RequestRange>::Node {
   /// Length of data read or written.
   int64_t len_;
 
+  int64_t wait_start_time_ns_ = -1;
+
   /// Id of disk queue containing byte range.
   int disk_id_;
 
