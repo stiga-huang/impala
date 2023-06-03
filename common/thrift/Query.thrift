@@ -144,7 +144,7 @@ const i32 MAX_FRAGMENT_INSTANCES_PER_NODE = 128
 struct TQueryOptions {
   1: optional bool abort_on_error = 0
   2: optional i32 max_errors = 100
-  3: optional bool disable_codegen = 0
+  3: optional bool disable_codegen = 1
   4: optional i32 batch_size = 0
   5: optional i32 num_nodes = NUM_NODES_ALL
   6: optional i64 max_scan_range_length = 0
