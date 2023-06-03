@@ -613,7 +613,7 @@ struct TQueryOptions {
   149: optional string fallback_db_for_functions;
 
   // See comment in ImpalaService.thrift
-  150: optional bool disable_codegen_cache = false;
+  150: optional bool disable_codegen_cache = true;
   151: optional TCodeGenCacheMode codegen_cache_mode = TCodeGenCacheMode.NORMAL;
 
   // See comment in ImpalaService.thrift
