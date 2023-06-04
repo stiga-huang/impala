@@ -97,7 +97,7 @@ using std::move;
 
 DEFINE_bool(print_llvm_ir_instruction_count, false,
     "if true, prints the instruction counts of all JIT'd functions");
-DEFINE_bool(disable_optimization_passes, false,
+DEFINE_bool(disable_optimization_passes, true,
     "if true, disables llvm optimization passes (used for testing)");
 DEFINE_bool(dump_ir, false, "if true, output IR after optimization passes");
 DEFINE_bool(perf_map, false,
