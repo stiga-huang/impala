@@ -616,18 +616,21 @@ if (BUILD_PACKAGES)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/opt")
     set(CPACK_PACKAGE_INSTALL_DIRECTORY "impala")
 
-    set(CPACK_RPM_PACKAGE_AUTOREQPROV " no")
-    set(CPACK_RPM_PACKAGE_RELOCATABLE TRUE)
-    set(CPACK_RPM_PACKAGE_REQUIRES
-        "cyrus-sasl-gssapi, cyrus-sasl-plain, krb5-workstation, openldap-devel, tzdata")
+    execute_process(
+      COMMAND $ENV{IMPALA_HOME}/docker/install_os_packages.sh --dry-run
+      COMMAND tail -1
+      OUTPUT_VARIABLE PKG_LIST
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    message(STATUS "Get required package list: ${PKG_LIST}")
 
-    # libsasl2-modules-gssapi-mit will include dependencies on libsasl2-modules, libc6, libgssapi-krb5-2, libssl1.1
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS
-        "libsasl2-modules-gssapi-mit (>= $ENV{IMPALA_CYRUS_SASL_VERSION})")
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS
-        "${CPACK_DEBIAN_PACKAGE_DEPENDS}, libsasl2-2 (>= $ENV{IMPALA_CYRUS_SASL_VERSION})")
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS
-        "${CPACK_DEBIAN_PACKAGE_DEPENDS}, language-pack-en, tzdata")
+    if (${CPACK_GENERATOR} MATCHES "RPM")
+      set(CPACK_RPM_PACKAGE_AUTOREQPROV " no")
+      set(CPACK_RPM_PACKAGE_RELOCATABLE TRUE)
+      set(CPACK_RPM_PACKAGE_REQUIRES ${PKG_LIST})
+    else()
+      set(CPACK_DEBIAN_PACKAGE_DEPENDS ${PKG_LIST})
+    endif()
   endif()
 
 include(CPack)
