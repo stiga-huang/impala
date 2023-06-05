@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.22)
 
 # This is a Kudu-specific flag that disables Kudu targets that are test-only.
 set(NO_TESTS 1)
@@ -600,7 +600,7 @@ if (BUILD_PACKAGES)
     set(CPACK_PACKAGE_HOMEPAGE_URL "https://impala.apache.org")
     set(CPACK_PACKAGE_VERSION "$ENV{IMPALA_VERSION}")
     set(CPACK_RPM_PACKAGE_LICENSE "ASL-2.0")
-    # Set a meaningful package name, e.g.
+    # Set a meaningful package name, e.g. Impala-4.3.0-SNAPSHOT_hive-3.1.3000.7.2.18.0-41-x86_64.el7
     set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}")
     set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_FILE_NAME}_hive-$ENV{IMPALA_HIVE_VERSION}")
     set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_FILE_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
