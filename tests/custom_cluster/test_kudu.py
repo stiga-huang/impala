@@ -28,7 +28,6 @@ from tests.common.custom_cluster_test_suite import CustomClusterTestSuite
 from tests.common.kudu_test_suite import KuduTestSuite
 from tests.common.skip import SkipIfKudu, SkipIfBuildType, SkipIf
 from tests.common.test_dimensions import add_mandatory_exec_option
-from tests.util.event_processor_utils import EventProcessorUtils
 
 KUDU_MASTER_HOSTS = pytest.config.option.kudu_master_hosts
 LOG = logging.getLogger(__name__)
@@ -308,11 +307,10 @@ class TestKuduHMSIntegration(CustomKuduTest):
     kudu_client.delete_table(kudu_tbl_name)
     assert not kudu_client.table_exists(kudu_tbl_name)
 
-    # Wait for events to prevent race condition
-    EventProcessorUtils.wait_for_event_processing(self)
-
     try:
-      cursor.execute("DROP TABLE %s" % kudu_tbl_name)
+      self.execute_query(
+          "DROP TABLE %s" % kudu_tbl_name,
+          {"sync_hms_events_wait_time_s": 10, "sync_hms_events_strict_mode": True})
       assert False
     except Exception as e:
       LOG.info(str(e))

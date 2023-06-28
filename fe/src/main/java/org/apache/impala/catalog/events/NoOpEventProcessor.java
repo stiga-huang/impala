@@ -68,6 +68,11 @@ public class NoOpEventProcessor implements ExternalEventsProcessor {
   }
 
   @Override
+  public long getLastSyncedEventId() {
+    return -1;
+  }
+
+  @Override
   public void pause() {
     // no-op
   }

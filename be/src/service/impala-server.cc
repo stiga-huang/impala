@@ -2213,11 +2213,15 @@ void ImpalaServer::WaitForCatalogUpdate(const int64_t catalog_update_version,
   }
 
   if (catalog_update_info_.catalog_service_id != catalog_service_id) {
-    timeline->MarkEvent("Detected change in catalog service ID");
+    if (timeline != nullptr) {
+      timeline->MarkEvent("Detected change in catalog service ID");
+    }
     VLOG_QUERY << "Detected change in catalog service ID";
   } else {
-    timeline->MarkEvent(Substitute("Applied catalog version $0",
-        catalog_update_version));
+    if (timeline != nullptr) {
+      timeline->MarkEvent(Substitute("Applied catalog version $0",
+          catalog_update_version));
+    }
     VLOG_QUERY << "Applied catalog version: " << catalog_update_version;
   }
 }
@@ -2236,11 +2240,16 @@ void ImpalaServer::WaitForCatalogUpdateTopicPropagation(
   }
 
   if (catalog_update_info_.catalog_service_id != catalog_service_id) {
-    timeline->MarkEvent("Detected change in catalog service ID");
+    if (timeline != nullptr) {
+      timeline->MarkEvent("Detected change in catalog service ID");
+    }
     VLOG_QUERY << "Detected change in catalog service ID";
   } else {
-    timeline->MarkEvent(Substitute("Min catalog topic version of coordinators reached $0",
-        min_req_subscriber_topic_version));
+    if (timeline != nullptr) {
+      timeline->MarkEvent(
+          Substitute("Min catalog topic version of coordinators reached $0",
+              min_req_subscriber_topic_version));
+    }
     VLOG_QUERY << "Min catalog topic version of coordinators: "
         << min_req_subscriber_topic_version;
   }
@@ -2263,11 +2272,15 @@ void ImpalaServer::WaitForMinCatalogUpdate(const int64_t min_req_catalog_object_
   }
 
   if (catalog_update_info_.catalog_service_id != catalog_service_id) {
-    timeline->MarkEvent("Detected change in catalog service ID");
+    if (timeline != nullptr) {
+      timeline->MarkEvent("Detected change in catalog service ID");
+    }
     VLOG_QUERY << "Detected change in catalog service ID";
   } else {
-    timeline->MarkEvent(Substitute("Local min catalog version reached $0",
-        min_req_catalog_object_version));
+    if (timeline != nullptr) {
+      timeline->MarkEvent(Substitute("Local min catalog version reached $0",
+          min_req_catalog_object_version));
+    }
     VLOG_QUERY << "Updated catalog object version lower bound: "
         << min_req_catalog_object_version;
   }
@@ -2324,7 +2337,9 @@ Status ImpalaServer::ProcessCatalogUpdateResult(
       // Apply the changes to the local catalog cache.
       TUpdateCatalogCacheResponse resp;
       Status status = exec_env_->frontend()->UpdateCatalogCache(update_req, &resp);
-      timeline->MarkEvent("Applied catalog updates from DDL");
+      if (timeline != nullptr) {
+        timeline->MarkEvent("Applied catalog updates from DDL");
+      }
       if (!status.ok()) LOG(ERROR) << status.GetDetail();
       RETURN_IF_ERROR(status);
     } else {

@@ -74,6 +74,7 @@ Catalog::Catalog() {
     {"getNullPartitionName", "()[B", &get_null_partition_name_id_},
     {"getLatestCompactions", "([B)[B", &get_latest_compactions_id_},
     {"getAllHadoopConfigs", "()[B", &get_hadoop_configs_id_},
+    {"waitForHmsEvent", "([B)[B", &wait_for_hms_event_id_},
   };
 
   JNIEnv* jni_env = JniUtil::GetJNIEnv();
@@ -235,4 +236,12 @@ Status Catalog::GetNullPartitionName(TGetNullPartitionNameResponse* resp) {
 Status Catalog::GetLatestCompactions(
     const TGetLatestCompactionsRequest& req, TGetLatestCompactionsResponse* resp) {
   return JniUtil::CallJniMethod(catalog_, get_latest_compactions_id_, req, resp);
+}
+
+Status Catalog::WaitForHmsEvent(const TWaitForHmsEventRequest& req,
+    TWaitForHmsEventResponse* resp) {
+  if (req.header.__isset.query_id) {
+    GetThreadDebugInfo()->SetQueryId(req.header.query_id);
+  }
+  return JniUtil::CallJniMethod(catalog_, wait_for_hms_event_id_, req, resp);
 }

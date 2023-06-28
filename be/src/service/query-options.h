@@ -50,7 +50,7 @@ typedef std::unordered_map<string, beeswax::TQueryOptionLevel::type>
 // time we add or remove a query option to/from the enum TImpalaQueryOptions.
 #define QUERY_OPTS_TABLE                                                                 \
   DCHECK_EQ(_TImpalaQueryOptions_VALUES_TO_NAMES.size(),                                 \
-      TImpalaQueryOptions::ICEBERG_DISABLE_COUNT_STAR_OPTIMIZATION + 1);                 \
+      TImpalaQueryOptions::SYNC_HMS_EVENTS_STRICT_MODE + 1);                             \
   REMOVED_QUERY_OPT_FN(abort_on_default_limit_exceeded, ABORT_ON_DEFAULT_LIMIT_EXCEEDED) \
   QUERY_OPT_FN(abort_on_error, ABORT_ON_ERROR, TQueryOptionLevel::REGULAR)               \
   REMOVED_QUERY_OPT_FN(allow_unsupported_formats, ALLOW_UNSUPPORTED_FORMATS)             \
@@ -326,6 +326,10 @@ typedef std::unordered_map<string, beeswax::TQueryOptionLevel::type>
   QUERY_OPT_FN(enable_tuple_cache, ENABLE_TUPLE_CACHE, TQueryOptionLevel::ADVANCED)      \
   QUERY_OPT_FN(iceberg_disable_count_star_optimization,                                  \
       ICEBERG_DISABLE_COUNT_STAR_OPTIMIZATION, TQueryOptionLevel::ADVANCED)              \
+  QUERY_OPT_FN(sync_hms_events_wait_time_s, SYNC_HMS_EVENTS_WAIT_TIME_S,                 \
+      TQueryOptionLevel::DEVELOPMENT)                                                    \
+  QUERY_OPT_FN(sync_hms_events_strict_mode, SYNC_HMS_EVENTS_STRICT_MODE,                 \
+      TQueryOptionLevel::DEVELOPMENT)                                                    \
   ;
 
 /// Enforce practical limits on some query options to avoid undesired query state.

@@ -702,6 +702,12 @@ struct TQueryOptions {
 
   // See comment in ImpalaService.thrift
   176: optional bool iceberg_disable_count_star_optimization = false;
+
+  // See comment in ImpalaService.thrift
+  177: optional i32 sync_hms_events_wait_time_s = 0;
+
+  // See comment in ImpalaService.thrift
+  178: optional bool sync_hms_events_strict_mode = false;
 }
 
 // Impala currently has three types of sessions: Beeswax, HiveServer2 and external
@@ -882,6 +888,9 @@ struct TQueryCtx {
 
   // True if the query can be optimized for Iceberg V2 table.
   30: required bool optimize_count_star_for_iceberg_v2 = false
+
+  // Any warnings from the planner
+  31: optional string warnings
 }
 
 

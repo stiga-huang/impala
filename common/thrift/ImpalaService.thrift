@@ -924,6 +924,15 @@ enum TImpalaQueryOptions {
 
   // Disables statistic-based count(*)-optimization for Iceberg tables.
   ICEBERG_DISABLE_COUNT_STAR_OPTIMIZATION = 175
+
+  // Maximum time in seconds to wait for catalogd catching up HMS events. Only events
+  // generated before the query is submitted will be waited for. Defaults to 0 which
+  // disables waiting.
+  SYNC_HMS_EVENTS_WAIT_TIME_S = 176
+
+  // Whether to fail the query if coordinator fails to wait for HMS events to be synced
+  // in catalogd, e.g. when event-processor is in ERROR state.
+  SYNC_HMS_EVENTS_STRICT_MODE = 177
 }
 
 // The summary of a DML statement.

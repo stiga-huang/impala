@@ -58,6 +58,7 @@ import org.apache.impala.catalog.events.MetastoreEvents.MetastoreEvent;
 import org.apache.impala.catalog.events.MetastoreEvents.MetastoreEventFactory;
 import org.apache.impala.common.Metrics;
 import org.apache.impala.common.PrintUtils;
+import org.apache.impala.common.Reference;
 import org.apache.impala.compat.MetastoreShim;
 import org.apache.impala.service.BackendConfig;
 import org.apache.impala.service.CatalogOpExecutor;
@@ -570,6 +571,9 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
   // can ignore the drop events when they are received later.
   private final DeleteEventLog deleteEventLog_ = new DeleteEventLog();
 
+  // Sleep interval when waiting for HMS events to be synced.
+  private final int hmsEventSyncWaitingIntervalMs_;
+
   @VisibleForTesting
   MetastoreEventsProcessor(CatalogOpExecutor catalogOpExecutor, long startSyncFromId,
       long pollingFrequencyInSec) throws CatalogException {
@@ -581,6 +585,10 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
     initMetrics();
     metastoreEventFactory_ = new MetastoreEventFactory(catalogOpExecutor);
     pollingFrequencyInSec_ = pollingFrequencyInSec;
+    hmsEventSyncWaitingIntervalMs_ = BackendConfig.INSTANCE
+        .getBackendCfg().hms_event_sync_waiting_interval_ms;
+    Preconditions.checkState(hmsEventSyncWaitingIntervalMs_ > 0,
+        "hms_event_sync_waiting_interval_ms must be positive");
   }
 
   /**
@@ -695,10 +703,8 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
   }
 
   /**
-   * returns the current value of LastSyncedEventId. This method is not thread-safe and
-   * only to be used for testing purposes
+   * returns the current value of LastSyncedEventId.
    */
-  @VisibleForTesting
   public long getLastSyncedEventId() {
     return lastSyncedEventId_.get();
   }
@@ -1321,4 +1327,53 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
   }
 
   public static List<String> getEventSkipList() { return EVENT_SKIP_LIST; }
+
+  public String waitForSyncUpToCurrentEvent(long timeoutMs, Reference<Boolean> success)
+      throws CatalogException {
+    // Only waits when event-processor is in ACTIVE/PAUSED states. PAUSED states happen
+    // at startup or when global invalidate is running, so it's ok to wait for.
+    if (!EventProcessorStatus.ACTIVE.equals(eventProcessorStatus_)
+        && !EventProcessorStatus.PAUSED.equals(eventProcessorStatus_)) {
+      success.setRef(false);
+      return "Current state of HMS event processor is " + eventProcessorStatus_;
+    }
+    long waitForEventId;
+    try {
+      waitForEventId = getCurrentEventId();
+    } catch (MetastoreNotificationFetchException e) {
+      success.setRef(false);
+      return "Failed to fetch current HMS event id: " + e.getMessage();
+    }
+    long lastSyncedEventId = getLastSyncedEventId();
+    long startMs = System.currentTimeMillis();
+    // Avoid too many log entries if the waiting interval is smaller than 500ms.
+    int logIntervals = Math.max(1, 1000 / hmsEventSyncWaitingIntervalMs_);
+    int numIters = 0;
+    while (lastSyncedEventId < waitForEventId
+        && System.currentTimeMillis() - startMs < timeoutMs) {
+      if (numIters++ % logIntervals == 0) {
+        LOG.info("Waiting for last synced event id ({}) to reach {}",
+            lastSyncedEventId, waitForEventId);
+      }
+      try {
+        Thread.sleep(hmsEventSyncWaitingIntervalMs_);
+      } catch (InterruptedException e) {
+        // ignore
+      }
+      lastSyncedEventId = getLastSyncedEventId();
+      if (!EventProcessorStatus.ACTIVE.equals(eventProcessorStatus_)
+          && !EventProcessorStatus.PAUSED.equals(eventProcessorStatus_)) {
+        success.setRef(false);
+        return "Current state of HMS event processor is " + eventProcessorStatus_;
+      }
+    }
+    if (lastSyncedEventId < waitForEventId) {
+      success.setRef(false);
+      return String.format("Timeout waiting for HMS events to be synced. Event id to " +
+          "wait for: %d. Last synced event id: %d", waitForEventId, lastSyncedEventId);
+    }
+    LOG.info("Last synced event id ({}) reached {}", lastSyncedEventId, waitForEventId);
+    success.setRef(true);
+    return null;
+  }
 }

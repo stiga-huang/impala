@@ -28,6 +28,7 @@ import static org.apache.impala.service.CatalogOpExecutor.FETCHED_HMS_TABLE;
 import static org.apache.impala.service.CatalogOpExecutor.FETCHED_LATEST_HMS_EVENT_ID;
 import static org.apache.impala.service.CatalogOpExecutor.GOT_TABLE_READ_LOCK;
 import static org.apache.impala.service.CatalogOpExecutor.GOT_TABLE_WRITE_LOCK;
+import static org.apache.impala.thrift.TCatalogObjectType.DATABASE;
 import static org.apache.impala.thrift.TCatalogObjectType.HDFS_PARTITION;
 import static org.apache.impala.thrift.TCatalogObjectType.TABLE;
 
@@ -107,6 +108,7 @@ import org.apache.impala.thrift.TCatalogObjectType;
 import org.apache.impala.thrift.TCatalogUpdateResult;
 import org.apache.impala.thrift.TDataSource;
 import org.apache.impala.thrift.TDatabase;
+import org.apache.impala.thrift.TErrorCode;
 import org.apache.impala.thrift.TEventProcessorMetrics;
 import org.apache.impala.thrift.TEventProcessorMetricsSummaryResponse;
 import org.apache.impala.thrift.TFunction;
@@ -126,12 +128,15 @@ import org.apache.impala.thrift.TPartitionStats;
 import org.apache.impala.thrift.TPrincipalType;
 import org.apache.impala.thrift.TPrivilege;
 import org.apache.impala.thrift.TResetMetadataRequest;
+import org.apache.impala.thrift.TStatus;
 import org.apache.impala.thrift.TTable;
 import org.apache.impala.thrift.TTableName;
 import org.apache.impala.thrift.TTableType;
 import org.apache.impala.thrift.TTableUsage;
 import org.apache.impala.thrift.TTableUsageMetrics;
 import org.apache.impala.thrift.TUpdateTableUsageRequest;
+import org.apache.impala.thrift.TWaitForHmsEventRequest;
+import org.apache.impala.thrift.TWaitForHmsEventResponse;
 import org.apache.impala.util.AcidUtils;
 import org.apache.impala.util.CatalogBlacklistUtils;
 import org.apache.impala.util.EventSequence;
@@ -3991,6 +3996,172 @@ public class CatalogServiceCatalog extends Catalog {
       }
       if (table != null) table.refreshLastUsedTime();
     }
+  }
+
+  private boolean addTableToWaitForHmsEventResponse(TWaitForHmsEventResponse res,
+      @Nullable Table tbl, String dbName, String tblName, boolean wantMinimalResponse) {
+    if (tbl == null) {
+      TCatalogObject tblDesc = new TCatalogObject();
+      tblDesc.setType(TCatalogObjectType.TABLE);
+      tblDesc.setTable(new TTable(dbName, tblName));
+      long version = deleteLog_.getLatestRemovedVersion(tblDesc);
+      // If the table is not in the delete log, it comes from an illegal table name.
+      // Note that coordinators could send illegal table names since the request is
+      // sent before the query is analyzed. What we get are potential table names
+      // that could be used by a query. E.g. "SELECT c FROM a.b" might read "a.b" or
+      // "default.a" in case "b" is an array/map column of table "default.a".
+      if (version > 0) {
+        tblDesc.setCatalog_version(version);
+        res.result.addToRemoved_catalog_objects(tblDesc);
+      }
+      return true;
+    }
+    if (wantMinimalResponse) {
+      res.result.addToUpdated_catalog_objects(tbl.toInvalidationObject());
+      return true;
+    }
+    try {
+      // TODO: count the lock waiting time into the request's timeout?
+      if (!tbl.readLock().tryLock(600000L, TimeUnit.MILLISECONDS)) {
+        String errMsg = "HMS events are synced as expected but timed out to get " +
+            "the update of table " + tbl.getFullName();
+        TStatus errStatus = new TStatus(TErrorCode.RPC_GENERAL_ERROR,
+            Lists.newArrayList(errMsg));
+        res.setStatus(errStatus);
+        // 'status' is a required field of TCatalogUpdateResult, so we have to set
+        // it though it's unused.
+        res.result.setStatus(errStatus);
+        LOG.error(errMsg);
+        return false;
+      }
+      res.result.addToUpdated_catalog_objects(tbl.toTCatalogObject());
+    } catch (InterruptedException e) {
+      // ignored
+    } finally {
+      if (tbl.isReadLockedByCurrentThread()) {
+        tbl.readLock().unlock();
+      }
+    }
+    return true;
+  }
+
+  private boolean addDbToWaitForHmsEventResponse(TWaitForHmsEventResponse res,
+      String dbName, boolean wantMinimalResponse, boolean wantTableList) {
+    Db db = getDb(dbName);
+    TCatalogObject resDb = new TCatalogObject();
+    resDb.setType(TCatalogObjectType.DATABASE);
+    if (db == null) {
+      resDb.setDb(new TDatabase(dbName));
+      long version = deleteLog_.getLatestRemovedVersion(resDb);
+      if (version > 0) {
+        resDb.setCatalog_version(version);
+        res.result.addToRemoved_catalog_objects(resDb);
+      }
+      for (TCatalogObject obj : deleteLog_.retrieveTableObjects(dbName)) {
+        res.result.addToRemoved_catalog_objects(obj);
+      }
+      return true;
+    }
+    if (wantMinimalResponse) {
+      res.result.addToUpdated_catalog_objects(db.toMinimalTCatalogObject());
+    } else {
+      resDb.setCatalog_version(db.getCatalogVersion());
+      resDb.setDb(db.toThrift());
+      res.result.addToUpdated_catalog_objects(resDb);
+    }
+    if (wantTableList) {
+      // TODO: gets a list of known tables from the coordinator and only sends
+      //  back unknown/updated/removed tables.
+      for (Table tbl : db.getTables()) {
+        if (!addTableToWaitForHmsEventResponse(res, tbl, tbl.getDb().getName(),
+            tbl.getName(), wantMinimalResponse)) {
+          return false;
+        }
+      }
+      // Add tables that are removed.
+      for (TCatalogObject obj : deleteLog_.retrieveTableObjects(dbName)) {
+        // Ignore re-created tables
+        if (db.getTable(obj.table.tbl_name) != null) continue;
+        res.result.addToRemoved_catalog_objects(obj);
+      }
+    }
+    return true;
+  }
+
+  public TWaitForHmsEventResponse waitForHmsEvent(TWaitForHmsEventRequest req)
+      throws CatalogException {
+    LOG.info("waitForHmsEvent request: want_minimal_response={}, coordinator={}, " +
+            "timeout_s={}, want_db_list={}, want_table_list={}, objects=[{}]",
+        req.header.want_minimal_response, req.header.coordinator_hostname, req.timeout_s,
+        req.want_db_list, req.want_table_list, !req.isSetObject_descs() ? "" :
+            req.object_descs.stream().map(Catalog::toCatalogObjectKey)
+                .collect(Collectors.joining(", ")));
+    TWaitForHmsEventResponse res = new TWaitForHmsEventResponse();
+    if (!(metastoreEventProcessor_ instanceof MetastoreEventsProcessor)) {
+      res.setStatus(new TStatus(TErrorCode.RPC_GENERAL_ERROR,
+          Lists.newArrayList("HMS event processing is disabled")));
+      LOG.error("HMS event processing is disabled. Return without waiting.");
+      return res;
+    }
+    MetastoreEventsProcessor eventsProcessor =
+        (MetastoreEventsProcessor) metastoreEventProcessor_;
+    Reference<Boolean> success = new Reference<>(false);
+    String error = eventsProcessor.waitForSyncUpToCurrentEvent(
+        req.timeout_s * 1000L, success);
+    if (!success.getRef()) {
+      res.setStatus(new TStatus(TErrorCode.RPC_GENERAL_ERROR, Lists.newArrayList(error)));
+      LOG.error(error);
+      return res;
+    }
+    res.setResult(new TCatalogUpdateResult());
+    res.getResult().setCatalog_service_id(JniCatalog.getServiceId());
+    boolean wantMinimalResponse = req.header.want_minimal_response;
+    if (req.isSetObject_descs()) {
+      for (TCatalogObject catalogObject: req.getObject_descs()) {
+        if (catalogObject.isSetDb()) {
+          addDbToWaitForHmsEventResponse(res, catalogObject.getDb().db_name,
+              wantMinimalResponse, req.want_table_list);
+        } else if (catalogObject.isSetTable()) {
+          TTable table = catalogObject.getTable();
+          Db db = getDb(table.db_name);
+          if (db == null) {
+            addDbToWaitForHmsEventResponse(res, table.db_name, wantMinimalResponse,
+                /*wantTableList*/false);
+            continue;
+          }
+          if (!addTableToWaitForHmsEventResponse(res, db.getTable(table.tbl_name),
+              table.db_name, table.tbl_name, wantMinimalResponse)) {
+            return res;
+          }
+        }
+      }
+    } else if (req.want_db_list) {
+      for (Db db : getAllDbs()) {
+        addDbToWaitForHmsEventResponse(res, db.getName(), wantMinimalResponse,
+            /*wantTableList*/false);
+      }
+      // Also add dbs that are recently deleted
+      for (TCatalogObject deletedDb : deleteLog_.retrieveDbObjects()) {
+        // Ignore re-created dbs
+        if (getDb(deletedDb.db.db_name) != null) continue;
+        res.result.addToRemoved_catalog_objects(deletedDb);
+      }
+    }
+    TStatus okStatus = new TStatus(TErrorCode.OK, Collections.emptyList());
+    res.setStatus(okStatus);
+    // 'status' is a required field of TCatalogUpdateResult, so we have to set it though
+    // it's unused.
+    res.result.setStatus(okStatus);
+    LOG.info("waitForHmsEvent succeeds. updated_objects=[{}], removed_objects=[{}]",
+        getCatalogUpdateSummary(res.result.updated_catalog_objects),
+        getCatalogUpdateSummary(res.result.removed_catalog_objects));
+    return res;
+  }
+
+  private String getCatalogUpdateSummary(List<TCatalogObject> objs) {
+    if (objs == null) return "";
+    return objs.stream().map(Catalog::toCatalogObjectSummary)
+        .collect(Collectors.joining(", "));
   }
 
   /**

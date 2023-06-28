@@ -183,8 +183,12 @@ class TestMetadataQueryStatements(ImpalaTestSuite):
       if cluster_properties.is_event_polling_enabled():
         # Using HMS event processor - wait until the database shows up.
         assert EventProcessorUtils.get_event_processor_status() == "ACTIVE"
-        EventProcessorUtils.wait_for_event_processing(self)
+        self.client.set_configuration({
+          "sync_hms_events_wait_time_s": 10,
+          "sync_hms_events_strict_mode": True
+        })
         self.confirm_db_exists("hive_test_desc_db")
+        self.client.clear_configuration()
       else:
         # Invalidate metadata to pick up hive-created db.
         self.client.execute("invalidate metadata")

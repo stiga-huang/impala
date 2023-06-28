@@ -475,3 +475,18 @@ Status CatalogOpExecutor::GetLatestCompactions(
   RETURN_IF_ERROR(rpc_status.status);
   return Status::OK();
 }
+
+Status CatalogOpExecutor::WaitForHmsEvent(const TWaitForHmsEventRequest& req,
+    TWaitForHmsEventResponse* resp) {
+  int attempt = 0; // Used for debug action only.
+  // TODO: use lightweight request client cache if no tables are required
+  CatalogServiceConnection::RpcStatus rpc_status =
+      CatalogServiceConnection::DoRpcWithRetry(env_->catalogd_client_cache(),
+          *ExecEnv::GetInstance()->GetCatalogdAddress().get(),
+          &CatalogServiceClientWrapper::WaitForHmsEvent, req,
+          FLAGS_catalog_client_connection_num_retries,
+          FLAGS_catalog_client_rpc_retry_interval_ms,
+          [&attempt]() { return CatalogRpcDebugFn(&attempt); }, resp);
+  RETURN_IF_ERROR(rpc_status.status);
+  return Status(resp->status);
+}

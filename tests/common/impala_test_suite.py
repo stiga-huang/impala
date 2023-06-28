@@ -1201,49 +1201,34 @@ class ImpalaTestSuite(BaseTestSuite):
     else:
       return "UNIDENTIFIED"
 
+  def has_value(self, value, lines):
+    """Check if lines contain value."""
+    return any([line.find(value) != -1 for line in lines])
+
   def wait_for_db_to_appear(self, db_name, timeout_s):
     """Wait until the database with 'db_name' is present in the impalad's local catalog.
     Fail after timeout_s if the doesn't appear."""
-    start_time = time.time()
-    while time.time() - start_time < timeout_s:
-      try:
-        # This will throw an exception if the database is not present.
-        self.client.execute("describe database `{db_name}`".format(db_name=db_name))
-        return
-      except Exception:
-        time.sleep(0.2)
-        continue
-    raise Exception("DB {0} didn't show up after {1}s", db_name, timeout_s)
+    self.execute_query_expect_success(
+        self.client, "describe database `{0}`".format(db_name),
+        {"sync_hms_events_wait_time_s": timeout_s, "sync_hms_events_strict_mode": True})
 
   def confirm_db_exists(self, db_name):
     """Confirm the database with 'db_name' is present in the impalad's local catalog.
        Fail if the db is not present"""
     # This will throw an exception if the database is not present.
     self.client.execute("describe database `{db_name}`".format(db_name=db_name))
-    return
 
   def confirm_table_exists(self, db_name, tbl_name):
     """Confirms if the table exists. The describe table command will fail if the table
        does not exist."""
     self.client.execute("describe `{0}`.`{1}`".format(db_name, tbl_name))
-    return
 
-  def wait_for_table_to_appear(self, db_name, table_name, timeout_s):
+  def wait_for_table_to_appear(self, db_name, table_name, timeout_s=10):
     """Wait until the table with 'table_name' in 'db_name' is present in the
     impalad's local catalog. Fail after timeout_s if the doesn't appear."""
-    start_time = time.time()
-    while time.time() - start_time < timeout_s:
-      try:
-        # This will throw an exception if the table is not present.
-        self.client.execute("describe `{db_name}`.`{table_name}`".format(
-                            db_name=db_name, table_name=table_name))
-        return
-      except Exception as ex:
-        print(str(ex))
-        time.sleep(0.2)
-        continue
-    raise Exception("Table {0}.{1} didn't show up after {2}s", db_name, table_name,
-                    timeout_s)
+    self.execute_query_expect_success(
+        self.client, "describe `{0}`.`{1}`".format(db_name, table_name),
+        {"sync_hms_events_wait_time_s": timeout_s, "sync_hms_events_strict_mode": True})
 
   def assert_eventually(self, timeout_s, period_s, condition, error_msg=None):
     """Assert that the condition (a function with no parameters) returns True within the
