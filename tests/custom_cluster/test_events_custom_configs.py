@@ -36,6 +36,10 @@ from tests.util.iceberg_util import IcebergCatalogs
 
 HIVE_SITE_HOUSEKEEPING_ON =\
     getenv('IMPALA_HOME') + '/fe/src/test/resources/hive-site-housekeeping-on'
+EVENT_SYNC_QUERY_OPTIONS = {
+    "sync_hms_events_wait_time_s": 10,
+    "sync_hms_events_strict_mode": True
+}
 
 
 @SkipIfFS.hive
@@ -110,10 +114,9 @@ class TestEventProcessingCustomConfigs(CustomClusterTestSuite):
           create table {db}.{tbl} (id int);
           insert into {db}.{tbl} values(1);""".format(db=db_name, tbl=tbl_name))
       # With MetastoreEventProcessor running, the insert event will be processed. Query
-      # the table from Impala.
-      EventProcessorUtils.wait_for_event_processing(self, event_proc_timeout)
-      # Verify that the data is present in Impala.
-      data = self.execute_scalar("select * from %s.%s" % (db_name, tbl_name))
+      # the table from Impala. Verify that the data is present in Impala.
+      data = self.execute_scalar("select * from %s.%s" % (db_name, tbl_name),
+                                 {"sync_hms_events_wait_time_s": event_proc_timeout})
       assert data == '1'
       # Execute ALTER TABLE + DROP in quick succession so they will be processed in the
       # same event batch.
@@ -1244,3 +1247,122 @@ class TestEventProcessingCustomConfigs(CustomClusterTestSuite):
 
       results = self.client.execute("select i from " + fq_tbl)
       assert results.data == ["1", "2", "3"]
+
+  @CustomClusterTestSuite.with_args(catalogd_args="--hms_event_polling_interval_s=5")
+  def test_hms_event_sync(self, unique_database):
+    """Verify query option sync_hms_events_wait_time_s should protect the query by
+    waiting until Impala sync the HMS changes. Set a large polling interval so Impala
+    is more likely to be out of sync with Hive."""
+    tbl_name = unique_database + ".tbl"
+    # Test DESCRIBE on new table created in Hive
+    self.run_stmt_in_hive(
+        "create table {0} (i int) partitioned by (p int)".format(tbl_name))
+    res = self.execute_query_expect_success(
+        self.client, "describe " + tbl_name, EVENT_SYNC_QUERY_OPTIONS)
+    assert res.data == ["i\tint\t", 'p\tint\t']
+    assert res.log == ''
+
+    # Test SHOW TABLES gets new tables created in Hive
+    self.run_stmt_in_hive("create table {0}_2 (i int)".format(tbl_name))
+    res = self.execute_query_expect_success(
+        self.client, "show tables in " + unique_database, EVENT_SYNC_QUERY_OPTIONS)
+    assert res.data == ["tbl", "tbl_2"]
+    assert res.log == ''
+
+    # Test SHOW VIEWS gets new views created in Hive
+    self.run_stmt_in_hive(
+        "create view {0}.v as select * from {1}".format(unique_database, tbl_name))
+    res = self.execute_query_expect_success(
+        self.client, "show views in " + unique_database, EVENT_SYNC_QUERY_OPTIONS)
+    assert res.data == ["v"]
+    assert res.log == ''
+
+    # Test DROP TABLE
+    try:
+      self.run_stmt_in_hive("""create database {0}_2;
+          create table {0}_2.tbl(i int);
+          create table {0}_2.tbl_2(i int);""".format(unique_database))
+      self.execute_query_expect_success(
+          self.client, "drop table {0}_2.tbl".format(unique_database),
+          EVENT_SYNC_QUERY_OPTIONS)
+    finally:
+      self.run_stmt_in_hive(
+          "drop database if exists {0}_2 cascade".format(unique_database))
+
+    # Test SHOW DATABASES
+    res = self.execute_query_expect_success(
+        self.client, "show databases", EVENT_SYNC_QUERY_OPTIONS)
+    assert unique_database + "\t" in res.data
+    assert unique_database + "_2\t" not in res.data
+
+    # Test DROP DATABASE
+    try:
+      self.run_stmt_in_hive("create database {0}_2".format(unique_database))
+      self.execute_query_expect_success(
+          self.client, "drop database {0}_2".format(unique_database),
+          EVENT_SYNC_QUERY_OPTIONS)
+    finally:
+      self.run_stmt_in_hive(
+          "drop database if exists {0}_2 cascade".format(unique_database))
+
+    # Test SELECT gets new values inserted by Hive
+    self.run_stmt_in_hive(
+        "insert into table {0} partition (p=0) select 0".format(tbl_name))
+    res = self.execute_query_expect_success(
+        self.client, "select * from " + tbl_name, EVENT_SYNC_QUERY_OPTIONS)
+    assert res.data == ["0\t0"]
+    assert res.log == ''
+    # Same case but using INSERT OVERWRITE in Hive
+    self.run_stmt_in_hive(
+        "insert overwrite table {0} partition (p=0) select 1".format(tbl_name))
+    res = self.execute_query_expect_success(
+        self.client, "select * from " + tbl_name, EVENT_SYNC_QUERY_OPTIONS)
+    assert res.data == ["1\t0"]
+    assert res.log == ''
+
+    # Test SHOW PARTITIONS gets new partitions created by Hive
+    self.run_stmt_in_hive(
+        "insert into table {0} partition (p=2) select 2".format(tbl_name))
+    res = self.execute_query_expect_success(
+        self.client, "show partitions " + tbl_name, EVENT_SYNC_QUERY_OPTIONS)
+    assert self.has_value('p=0', res.data)
+    assert self.has_value('p=2', res.data)
+    # 3 result lines: 2 for partitions, 1 for total info
+    assert len(res.data) == 3
+    assert res.log == ''
+
+    # Test CREATE TABLE on table dropped by Hive
+    self.run_stmt_in_hive("drop table " + tbl_name)
+    self.execute_query_expect_success(
+        self.client, "create table {0} (j int)".format(tbl_name),
+        EVENT_SYNC_QUERY_OPTIONS)
+    res = self.execute_query_expect_success(self.client, "describe " + tbl_name)
+    assert res.data == ["j\tint\t"]
+    assert res.log == ''
+
+  @CustomClusterTestSuite.with_args(catalogd_args="--hms_event_polling_interval_s=0")
+  def test_hms_event_sync_with_event_processing_disabled(self):
+    """Test with HMS event processing disabled. Verify the error message appears
+    correctly in non-strict mode. Verify the query fails in strict mode."""
+    query = "select count(*) from functional.alltypes"
+    # Verify error messages in non-strict mode
+    handle = self.execute_query_async(
+        query, query_options={"sync_hms_events_wait_time_s": 60})
+    self.wait_for_state(handle, self.client.QUERY_STATES['FINISHED'], 60)
+    results = self.client.fetch(query, handle)
+    assert results.success
+    assert len(results.data) == 1
+    assert int(results.data[0]) == 7300
+
+    client_log = self.client.get_log(handle)
+    expected_error = "Failed to wait until HMS events got synced: HMS event processing is disabled"
+    assert expected_error in client_log
+
+    profile = self.client.get_runtime_profile(handle)
+    assert "Failed to sync events from Metastore: " in profile, profile
+    assert "Errors: " + expected_error in profile, profile
+
+    # Verify failures in strict mode
+    err = self.execute_query_expect_failure(
+        self.client, query, EVENT_SYNC_QUERY_OPTIONS)
+    assert expected_error in str(err)

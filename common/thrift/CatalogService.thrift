@@ -746,6 +746,41 @@ struct TUpdateTableUsageResponse {
   1: optional Status.TStatus status
 }
 
+struct TWaitForHmsEventRequest {
+  1: required CatalogServiceVersion protocol_version = CatalogServiceVersion.V2
+
+  // Common header included in all CatalogService requests.
+  2: required TCatalogServiceRequestHeader header
+
+  // Timeout in seconds for waiting catalogd to catch up the latest event when it
+  // receives this request.
+  3: required i32 timeout_s
+
+  // Set to true for SHOW DATABASES statements.
+  4: required bool want_db_list
+
+  // Set to true for SHOW TABLES/VIEWS statesments.
+  5: required bool want_table_list
+
+  // Descriptors of catalog objects that might be used by the query.
+  6: optional list<CatalogObjects.TCatalogObject> object_descs
+}
+
+struct TWaitForHmsEventResponse {
+  // The CatalogService service ID this result came from.
+  1: required Types.TUniqueId catalog_service_id
+
+  // Catalog version which is higher enough to contain the changes of the waited
+  // HMS event. Coordinator can stop waiting when it's local catalog version
+  // reaches this.
+  2: required i64 catalog_version
+
+  // The status of the operation, OK if the operation was successful.
+  3: required Status.TStatus status
+
+  4: optional TCatalogUpdateResult result
+}
+
 // The CatalogService API
 service CatalogService {
   // Executes a DDL request and returns details on the result of the operation.
@@ -786,4 +821,8 @@ service CatalogService {
 
   // Gets the latest compactions.
   TGetLatestCompactionsResponse GetLatestCompactions(1: TGetLatestCompactionsRequest req);
+
+  // Waits until catalogd processes the latest HMS event and get the catalog version
+  // to catch up the metadata changes.
+  TWaitForHmsEventResponse WaitForHmsEvent(1: TWaitForHmsEventRequest req);
 }

@@ -98,6 +98,9 @@ DEFINE_int32(max_wait_time_for_sync_ddl_s, 0, "Maximum time (in seconds) until "
      "before throwing an error indicating that not all the "
      "coordinators might have applied the changes caused due to the ddl.");
 
+DEFINE_int32_hidden(hms_event_sync_waiting_interval_ms, 100, "Sleep interval (in ms) "
+     "when waiting for HMS events to be synced.");
+
 DECLARE_string(debug_actions);
 DEFINE_bool(start_hms_server, false, "When set to true catalog server starts a HMS "
     "server at a port specified by hms_port flag");
@@ -427,6 +430,25 @@ class CatalogServiceThriftIf : public CatalogServiceIf {
     status.ToThrift(&thrift_status);
     resp.__set_status(thrift_status);
     VLOG_RPC << "GetLatestCompactions(): response=" << ThriftDebugStringNoThrow(resp);
+  }
+
+  void WaitForHmsEvent(TWaitForHmsEventResponse& resp,
+      const TWaitForHmsEventRequest& req) override {
+    VLOG_RPC << "WaitForHmsEvent(): request=" << ThriftDebugString(req);
+    Status status = AcceptRequest(req.protocol_version);
+    if (status.ok()) {
+      status = catalog_server_->catalog()->WaitForHmsEvent(req, &resp);
+    }
+    if (!status.ok()) {
+      LOG(WARNING) << status.GetDetail();
+      // Status in response is not set if the error is due to an exception.
+      if (resp.status.status_code == TErrorCode::OK) {
+        TStatus thrift_status;
+        status.ToThrift(&thrift_status);
+        resp.__set_status(thrift_status);
+      }
+    }
+    VLOG_RPC << "WaitForHmsEvent(): response.status=" << resp.status;
   }
 
  private:

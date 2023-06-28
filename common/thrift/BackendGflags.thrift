@@ -292,4 +292,6 @@ struct TBackendGflags {
   130: required bool enable_workload_mgmt
 
   131: required string query_log_table_name
+
+  132: required i32 hms_event_sync_waiting_interval_ms
 }

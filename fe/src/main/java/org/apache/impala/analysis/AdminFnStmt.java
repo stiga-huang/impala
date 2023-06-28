@@ -162,4 +162,7 @@ public class AdminFnStmt extends StatementBase {
     }
     return result;
   }
+
+  @Override
+  public boolean requiresHmsMetadata() { return false; }
 }

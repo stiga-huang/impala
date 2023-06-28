@@ -68,6 +68,16 @@ public abstract class StatementBase extends StmtNode {
   public void collectTableRefs(List<TableRef> tblRefs) { }
 
   /**
+   * Returns the db name for CREATE/DROP/ALTER database or SHOW TABLES/VIEWS statements.
+   */
+  public String getParsedDb() { return null; }
+
+  /**
+   * Returns whether the analysis on the statement requires HMS metadata.
+   */
+  public boolean requiresHmsMetadata() { return true; }
+
+  /**
    * Analyzes the statement and throws an AnalysisException if analysis fails. A failure
    * could be due to a problem with the statement or because one or more tables/views
    * were missing from the catalog.

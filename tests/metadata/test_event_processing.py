@@ -24,14 +24,14 @@ from tests.common.skip import SkipIfFS, SkipIfHive2, SkipIfCatalogV2
 from tests.metadata.test_event_processing_base import TestEventProcessingBase
 from tests.util.event_processor_utils import EventProcessorUtils
 
+PROCESSING_TIMEOUT_S = 10
+
 
 @SkipIfFS.hive
 @SkipIfCatalogV2.hms_event_polling_disabled()
 class TestEventProcessing(ImpalaTestSuite):
   """This class contains tests that exercise the event processing mechanism in the
   catalog."""
-  CATALOG_URL = "http://localhost:25020"
-  PROCESSING_TIMEOUT_S = 10
 
   @SkipIfHive2.acid
   def test_transactional_insert_events(self, unique_database):
@@ -82,29 +82,28 @@ class TestEventProcessing(ImpalaTestSuite):
       is_transactional)
     self.run_stmt_in_hive("create table {0} (key string, value string) \
       partitioned by (year int) stored as parquet {1}".format(test_tbl, TBLPROPERTIES))
-    EventProcessorUtils.wait_for_event_processing(self)
+    self.client.set_configuration({
+      "sync_hms_events_wait_time_s": PROCESSING_TIMEOUT_S,
+      "sync_hms_events_strict_mode": True
+    })
     self.client.execute("describe {0}".format(test_tbl))
 
     self.run_stmt_in_hive(
       "alter table {0} add partition (year=2019)".format(test_tbl))
-    EventProcessorUtils.wait_for_event_processing(self)
     assert [('2019',)] == self.get_impala_partition_info(test_tbl, 'year')
 
     self.run_stmt_in_hive(
       "alter table {0} add if not exists partition (year=2019)".format(test_tbl))
-    EventProcessorUtils.wait_for_event_processing(self)
     assert [('2019',)] == self.get_impala_partition_info(test_tbl, 'year')
     assert EventProcessorUtils.get_event_processor_status() == "ACTIVE"
 
     self.run_stmt_in_hive(
       "alter table {0} drop partition (year=2019)".format(test_tbl))
-    EventProcessorUtils.wait_for_event_processing(self)
     assert ('2019') not in self.get_impala_partition_info(test_tbl, 'year')
     assert EventProcessorUtils.get_event_processor_status() == "ACTIVE"
 
     self.run_stmt_in_hive(
       "alter table {0} drop if exists partition (year=2019)".format(test_tbl))
-    EventProcessorUtils.wait_for_event_processing(self)
     assert ('2019') not in self.get_impala_partition_info(test_tbl, 'year')
     assert EventProcessorUtils.get_event_processor_status() == "ACTIVE"
 

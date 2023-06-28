@@ -126,6 +126,14 @@ class CatalogServiceClientWrapper : public CatalogServiceClient {
     *send_done = true;
     recv_GetLatestCompactions(_return);
   }
+
+  void WaitForHmsEvent(TWaitForHmsEventResponse& _return,
+      const TWaitForHmsEventRequest& req, bool* send_done) {
+    DCHECK(!*send_done);
+    send_WaitForHmsEvent(req);
+    *send_done = true;
+    recv_WaitForHmsEvent(_return);
+  }
 #pragma clang diagnostic pop
 };
 

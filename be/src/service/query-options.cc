@@ -1229,6 +1229,17 @@ Status impala::SetQueryOption(const string& key, const string& value,
         query_options->__set_iceberg_disable_count_star_optimization(IsTrue(value));
         break;
       }
+      case TImpalaQueryOptions::SYNC_HMS_EVENTS_WAIT_TIME_S: {
+        int32_t time_s = 0;
+        RETURN_IF_ERROR(QueryOptionParser::ParseAndCheckNonNegative<int32_t>(
+            option, value, &time_s));
+        query_options->__set_sync_hms_events_wait_time_s(time_s);
+        break;
+      }
+      case TImpalaQueryOptions::SYNC_HMS_EVENTS_STRICT_MODE: {
+        query_options->__set_sync_hms_events_strict_mode(IsTrue(value));
+        break;
+      }
       default:
         if (IsRemovedQueryOption(key)) {
           LOG(WARNING) << "Ignoring attempt to set removed query option '" << key << "'";

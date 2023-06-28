@@ -494,6 +494,7 @@ class ClientRequestState {
   void UnRegisterRemainingRPCs();
   // Copy pending RPCs for a retried query
   void CopyRPCs(ClientRequestState& from_request);
+
  protected:
   /// Updates the end_time_us_ of this query if it isn't set. The end time is determined
   /// when this function is called for the first time, calling it multiple times does not

@@ -1424,6 +1424,9 @@ string Coordinator::GetErrorLog() {
     lock_guard<SpinLock> l(backend_states_init_lock_);
     for (BackendState* state: backend_states_) state->MergeErrorLog(&merged);
   }
+  if (query_ctx().__isset.warnings) {
+    return query_ctx().warnings + PrintErrorMapToString(merged);
+  }
   return PrintErrorMapToString(merged);
 }
 

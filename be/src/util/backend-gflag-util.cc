@@ -123,6 +123,7 @@ DECLARE_string(inject_process_event_failure_event_types);
 DECLARE_double(inject_process_event_failure_ratio);
 DECLARE_bool(enable_workload_mgmt);
 DECLARE_string(query_log_table_name);
+DECLARE_int32(hms_event_sync_waiting_interval_ms);
 
 // HS2 SAML2.0 configuration
 // Defined here because TAG_FLAG caused issues in global-flags.cc
@@ -470,6 +471,7 @@ Status PopulateThriftBackendGflags(TBackendGflags& cfg) {
   cfg.__set_inject_process_event_failure_ratio(FLAGS_inject_process_event_failure_ratio);
   cfg.__set_enable_workload_mgmt(FLAGS_enable_workload_mgmt);
   cfg.__set_query_log_table_name(FLAGS_query_log_table_name);
+  cfg.__set_hms_event_sync_waiting_interval_ms(FLAGS_hms_event_sync_waiting_interval_ms);
   return Status::OK();
 }
 
