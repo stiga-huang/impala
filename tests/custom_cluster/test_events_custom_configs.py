@@ -825,3 +825,49 @@ class TestEventProcessingCustomConfigs(CustomClusterTestSuite):
       tblproperties = "tblproperties ('transactional'='true'," \
                       "'transactional_properties'='insert_only')"
     return tblproperties
+
+  @CustomClusterTestSuite.with_args(catalogd_args="--hms_event_polling_interval_s=5")
+  def test_stale_drop_partition_events(self, unique_database):
+    """Regression Tests for IMPALA-12256. Verifies stale DROP_PARTITION events are
+    skipped even if they are processed late after some other DDLs. Uses a higher polling
+    interval to ensure late processing on the events"""
+    self.client.execute(
+        "create table %s.part(i int) partitioned by (p int) stored as textfile"
+        % unique_database)
+    self.client.execute(
+        "insert into %s.part partition (p=0) values (0)" % unique_database)
+    partition_ddls = [
+      "compute stats %s.part" % unique_database,
+      "compute incremental stats %s.part" % unique_database,
+      "compute incremental stats %s.part partition(p=0)" % unique_database,
+      "alter table %s.part partition(p=0) set row format"
+      "  delimited fields terminated by ','" % unique_database,
+      "alter table %s.part partition(p=0) set fileformat parquet" % unique_database,
+      "alter table %s.part partition(p=0) set location '/tmp'" % unique_database,
+      "alter table %s.part partition(p=0) set tblproperties('k'='v')" % unique_database,
+      "refresh %s.part partition(p=0)" % unique_database,
+      "refresh %s.part" % unique_database,
+    ]
+    EventProcessorUtils.wait_for_event_processing(self)
+    parts_added_before = EventProcessorUtils.get_int_metric("partitions-added")
+    parts_refreshed_before = EventProcessorUtils.get_int_metric("partitions-refreshed")
+    parts_removed_before = EventProcessorUtils.get_int_metric("partitions-removed")
+    for ddl in partition_ddls:
+      events_skipped_before = EventProcessorUtils.get_int_metric("events-skipped")
+      # Drop-create the partition and then runs a DDL on it.
+      self.client.execute(
+          "alter table %s.part drop partition (p=0)" % unique_database)
+      self.client.execute(
+          "insert into %s.part partition(p=0) values (1),(2)" % unique_database)
+      self.client.execute(ddl)
+      EventProcessorUtils.wait_for_event_processing(self)
+      events_skipped_after = EventProcessorUtils.get_int_metric("events-skipped")
+      parts_added_after = EventProcessorUtils.get_int_metric("partitions-added")
+      parts_refreshed_after = EventProcessorUtils.get_int_metric("partitions-refreshed")
+      parts_removed_after = EventProcessorUtils.get_int_metric("partitions-removed")
+      # Event-processor should not update any partitions since all events should be
+      # skipped
+      assert parts_removed_before == parts_removed_after
+      assert parts_added_before == parts_added_after
+      assert parts_refreshed_before == parts_refreshed_after
+      assert events_skipped_after > events_skipped_before
