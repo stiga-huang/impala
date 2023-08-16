@@ -39,6 +39,7 @@ import org.apache.hadoop.hive.metastore.api.Database;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.NotificationEvent;
 import org.apache.hadoop.hive.metastore.api.Partition;
+import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.api.TxnToWriteId;
 import org.apache.hadoop.hive.metastore.messaging.AbortTxnMessage;
@@ -250,7 +251,7 @@ public class MetastoreEvents {
      * @throws MetastoreNotificationException if a NotificationEvent could not be
      *     parsed into MetastoreEvent
      */
-    List<MetastoreEvent> getFilteredEvents(List<NotificationEvent> events,
+    public List<MetastoreEvent> getFilteredEvents(List<NotificationEvent> events,
         Metrics metrics) throws MetastoreNotificationException {
       Preconditions.checkNotNull(events);
       if (events.isEmpty()) return Collections.emptyList();
@@ -912,6 +913,10 @@ public class MetastoreEvents {
     // can be skipped for certain type of alter table statements
     protected boolean skipFileMetadataReload_ = false;
 
+    // A boolean flag used in alter table event to record if the table metadata reload
+    // can be skipped for certain type of alter table statements
+    protected boolean skipTableMetadataReload_ = false;
+
     // in case of partition batch events, this method can be overridden to return
     // the partition object from the events which are batched together.
     protected Partition getPartitionForBatching() { return null; }
@@ -1014,7 +1019,7 @@ public class MetastoreEvents {
       try {
         if (!catalog_.reloadTableIfExists(dbName_, tblName_,
             "Processing " + operation + " event from HMS", getEventId(),
-            skipFileMetadataReload_)) {
+            skipTableMetadataReload_, skipFileMetadataReload_)) {
           debugLog("Automatic refresh on table {} failed as the table "
                   + "either does not exist anymore or is not in loaded state.",
               getFullyQualifiedTblName());
@@ -1707,6 +1712,8 @@ public class MetastoreEvents {
       }
       skipFileMetadataReload_ = !isTruncateOp_ && canSkipFileMetadataReload(tableBefore_,
           tableAfter_);
+      skipTableMetadataReload_ = canSkipTableMetadataReload(tableBefore_, tableAfter_);
+
       long startNs = System.nanoTime();
       if (wasEventSyncTurnedOn()) {
         handleEventSyncTurnedOn();
@@ -1763,6 +1770,33 @@ public class MetastoreEvents {
     }
 
     /**
+     * This method checks if the reloading of table metadata can be skipped for an alter
+     * statement. This method accepts two arguments, 1) pre-modified HMS table instance
+     * 2) post-modified HMS table instance and compare what really changed in the alter
+     * event.
+     */
+    private boolean canSkipTableMetadataReload(
+        org.apache.hadoop.hive.metastore.api.Table beforeTable,
+        org.apache.hadoop.hive.metastore.api.Table afterTable) {
+      if (beforeTable.getSd() != null && afterTable.getSd() != null) {
+        StorageDescriptor beforeSd = beforeTable.getSd();
+        StorageDescriptor afterSd = afterTable.getSd();
+        // Alter table with Set row format, set fileformat/serde, set location doesn't
+        // require reloading of table schema. So we can skip if any of these changes.
+        if (!Objects.equals(beforeSd.getLocation(), afterSd.getLocation()) ||
+            !Objects.equals(beforeSd.getInputFormat(), afterSd.getInputFormat()) ||
+            !Objects.equals(beforeSd.getOutputFormat(), afterSd.getOutputFormat()) ||
+            !Objects.equals(beforeSd.getSerdeInfo(), afterSd.getSerdeInfo())) {
+          infoLog("Change in table storage descriptor (SD) detected for table {}.{}. " +
+              "So table schema reload can be skipped. SD before: {}, SD after: {}",
+              dbName_, tblName_, beforeSd.toString(), afterSd.toString());
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /**
      * This method checks if the reloading of file metadata can be skipped for an alter
      * statement. This method accepts two arguments, 1) pre-modified HMS table instance
      * 2) post-modified HMS table instance and compare what really changed in the alter
@@ -1774,6 +1808,9 @@ public class MetastoreEvents {
       Set<String> whitelistedTblProperties = catalog_.getWhitelistedTblProperties();
       // If the whitelisted table properties are empty, then we skip this optimization
       if (whitelistedTblProperties.isEmpty()) {
+        return false;
+      }
+      if (canSkipTableMetadataReload(beforeTable, afterTable)) {
         return false;
       }
       // There are lot of other alter statements which doesn't require file metadata

@@ -921,7 +921,7 @@ public class MetastoreShim extends Hive3MetastoreShimBase {
           }
         } else {
           catalog_.reloadTableIfExists(entry.getKey().getDb(), entry.getKey().getTbl(),
-               "CommitTxnEvent", getEventId(), /*isSkipFileMetadataReload*/false);
+               "CommitTxnEvent", getEventId(), false, /*isSkipFileMetadataReload*/false);
         }
       }
     }

@@ -2595,7 +2595,7 @@ public class CatalogServiceCatalog extends Catalog {
    * and ignore the result.
    */
   public void reloadTable(Table tbl, String reason) throws CatalogException {
-    reloadTable(tbl, reason, -1, false);
+    reloadTable(tbl, reason, -1, false, false);
   }
 
   /**
@@ -2605,9 +2605,10 @@ public class CatalogServiceCatalog extends Catalog {
    * eventId: HMS event id which triggered reload
    */
   public void reloadTable(Table tbl, String reason, long eventId,
-      boolean isSkipFileMetadataReload) throws CatalogException {
+      boolean isSkipTableMetadataReload, boolean isSkipFileMetadataReload)
+      throws CatalogException {
     reloadTable(tbl, new TResetMetadataRequest(), CatalogObject.ThriftObjectType.NONE,
-        reason, eventId, isSkipFileMetadataReload);
+        reason, eventId, isSkipTableMetadataReload, isSkipFileMetadataReload);
   }
 
   /**
@@ -2619,7 +2620,7 @@ public class CatalogServiceCatalog extends Catalog {
       CatalogObject.ThriftObjectType resultType, String reason, long eventId)
       throws CatalogException {
     return reloadTable(tbl, request, resultType, reason, eventId,
-        /*isSkipFileMetadataReload*/false);
+        /*isSkipTableMetadataReload*/false, /*isSkipFileMetadataReload*/false);
   }
 
   /**
@@ -2638,7 +2639,8 @@ public class CatalogServiceCatalog extends Catalog {
    */
   public TCatalogObject reloadTable(Table tbl, TResetMetadataRequest request,
       CatalogObject.ThriftObjectType resultType, String reason, long eventId,
-      boolean isSkipFileMetadataReload) throws CatalogException {
+      boolean isSkipTableMetadataReload, boolean isSkipFileMetadataReload)
+      throws CatalogException {
     LOG.info(String.format("Refreshing table metadata: %s", tbl.getFullName()));
     Preconditions.checkState(!(tbl instanceof IncompleteTable));
     String dbName = tbl.getDb().getName();
@@ -2681,14 +2683,16 @@ public class CatalogServiceCatalog extends Catalog {
         if (tbl instanceof HdfsTable) {
           ((HdfsTable) tbl)
               .load(true, msClient.getHiveClient(), msTbl, !isSkipFileMetadataReload,
-                  /* loadTableSchema*/true, request.refresh_updated_hms_partitions,
-                  /* partitionsToUpdate*/null, request.debug_action,
-                  /*partitionToEventId*/null, reason);
+                  /* loadTableSchema*/!isSkipTableMetadataReload,
+                  request.refresh_updated_hms_partitions, /* partitionsToUpdate*/null,
+                  request.debug_action, /*partitionToEventId*/null, reason);
         } else {
           tbl.load(true, msClient.getHiveClient(), msTbl, reason);
         }
       }
-      if (currentHmsEventId != -1 && syncToLatestEventId) {
+      boolean isFullReloadOnTable = !isSkipFileMetadataReload &&
+          !isSkipTableMetadataReload;
+      if (currentHmsEventId != -1 && syncToLatestEventId && isFullReloadOnTable) {
         // fetch latest event id from HMS before starting table load and set that event
         // id as table's last synced id. It may happen that while the table was being
         // reloaded, more events were generated for the table and the table reload would
@@ -2703,10 +2707,10 @@ public class CatalogServiceCatalog extends Catalog {
       LOG.info(String.format("Refreshed table metadata: %s", tbl.getFullName()));
       // Set the last refresh event id as current HMS event id since all the metadata
       // until the current HMS event id is refreshed at this point.
-      if (currentHmsEventId > eventId) {
-        tbl.setLastRefreshEventId(currentHmsEventId);
+      if (currentHmsEventId > eventId && isFullReloadOnTable) {
+        tbl.setLastRefreshEventId(currentHmsEventId, isFullReloadOnTable);
       } else {
-        tbl.setLastRefreshEventId(eventId);
+        tbl.setLastRefreshEventId(eventId, isFullReloadOnTable);
       }
       return tbl.toTCatalogObject(resultType);
     } finally {
@@ -2889,7 +2893,8 @@ public class CatalogServiceCatalog extends Catalog {
    * otherwise.
    */
   public boolean reloadTableIfExists(String dbName, String tblName, String reason,
-      long eventId, boolean isSkipFileMetadataReload) throws CatalogException {
+      long eventId, boolean isSkipTableMetadataReload, boolean isSkipFileMetadataReload)
+      throws CatalogException {
     try {
       Table table = getTable(dbName, tblName);
       if (table == null || table instanceof IncompleteTable) return false;
@@ -2898,7 +2903,8 @@ public class CatalogServiceCatalog extends Catalog {
             + "event {}.", dbName, tblName, eventId, table.getCreateEventId());
         return false;
       }
-      reloadTable(table, reason, eventId, isSkipFileMetadataReload);
+      reloadTable(table, reason, eventId, isSkipTableMetadataReload,
+          isSkipFileMetadataReload);
     } catch (DatabaseNotFoundException | TableLoadingException e) {
       LOG.info(String.format("Reload table if exists failed with: %s", e.getMessage()));
       return false;

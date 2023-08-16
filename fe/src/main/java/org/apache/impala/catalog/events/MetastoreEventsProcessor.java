@@ -350,6 +350,7 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
    * @param catalog
    * @param tbl: Catalog table to be synced
    * @param eventFactory
+   * @param metrics
    * @throws CatalogException
    * @throws MetastoreNotificationException
    */
@@ -372,15 +373,17 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
     try(ThreadNameAnnotator tna = new ThreadNameAnnotator(annotation)) {
       List<NotificationEvent> events = getNextMetastoreEventsInBatches(catalog,
           lastEventId, getTableNotificationEventFilter(tbl));
-
-      if (events.isEmpty()) {
+      // Filter out black listed table events and make batch events if possible
+      List<MetastoreEvent> filteredEvents = eventFactory.getFilteredEvents(events,
+          metrics);
+      if (filteredEvents.isEmpty()) {
         LOG.debug("table {} synced till event id {}. No new HMS events to process from "
                 + "event id: {}", tbl.getFullName(), lastEventId, lastEventId + 1);
         return;
       }
       MetastoreEvents.MetastoreEvent currentEvent = null;
-      for (NotificationEvent event : events) {
-        currentEvent = eventFactory.get(event, metrics);
+      for (MetastoreEvent filteredEvent : filteredEvents) {
+        currentEvent = filteredEvent;
         LOG.trace("for table {}, processing event {}", tbl.getFullName(), currentEvent);
         currentEvent.processIfEnabled();
         if (currentEvent.isDropEvent()) {
@@ -417,6 +420,7 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
    * @param catalog
    * @param db
    * @param eventFactory
+   * @param metrics
    * @throws CatalogException
    * @throws MetastoreNotificationException
    */
@@ -434,16 +438,18 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
     try(ThreadNameAnnotator tna = new ThreadNameAnnotator(annotation)) {
       List<NotificationEvent> events = getNextMetastoreEventsInBatches(catalog,
           lastEventId, getDbNotificationEventFilter(db));
-
-      if (events.isEmpty()) {
+      // Filter out black listed DB events
+      List<MetastoreEvent> filteredEvents = eventFactory.getFilteredEvents(events,
+          metrics);
+      if (filteredEvents.isEmpty()) {
         LOG.debug("db {} already synced till event id: {}, no new hms events from "
             + "event id: {}", db.getName(), lastEventId, lastEventId+1);
         return;
       }
 
       MetastoreEvents.MetastoreEvent currentEvent = null;
-      for (NotificationEvent event : events) {
-        currentEvent = eventFactory.get(event, metrics);
+      for (MetastoreEvent filteredEvent : filteredEvents) {
+        currentEvent = filteredEvent;
         LOG.trace("for db {}, processing event: {}", db.getName(), currentEvent);
         currentEvent.processIfEnabled();
         if (currentEvent.isDropEvent()) {

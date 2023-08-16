@@ -144,7 +144,7 @@ public class TableLoader {
       table.load(false, msClient.getHiveClient(), msTbl, reason);
       table.validate();
       if (syncToLatestEventId) {
-        LOG.debug("After full reload, table {} is synced atleast till event id {}. "
+        LOG.debug("After full reload, table {} is synced at least till event id {}. "
                 + "Checking if there are more events generated for this table "
                 + "while the full reload was in progress", table.getFullName(),
             latestEventId);

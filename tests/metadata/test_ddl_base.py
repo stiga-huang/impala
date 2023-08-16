@@ -66,21 +66,24 @@ class TestDdlBase(ImpalaTestSuite):
     impala_client.execute(ddl)
     impala_client.close()
 
-  def _get_tbl_properties(self, table_name):
+  @classmethod
+  def _get_tbl_properties(cls, client, table_name):
     """Extracts the table properties mapping from the output of DESCRIBE FORMATTED"""
-    return self._get_properties('Table Parameters:', table_name)
+    return cls._get_properties(client, 'Table Parameters:', table_name)
 
-  def _get_serde_properties(self, table_name):
+  @classmethod
+  def _get_serde_properties(cls, client, table_name):
     """Extracts the serde properties mapping from the output of DESCRIBE FORMATTED"""
-    return self._get_properties('Storage Desc Params:', table_name)
+    return cls._get_properties(client, 'Storage Desc Params:', table_name)
 
-  def _get_db_owner_properties(self, db_name):
+  def _get_db_owner_properties(self, client, db_name):
     """Extracts the DB properties mapping from the output of DESCRIBE FORMATTED"""
-    return self._get_properties("Owner:", db_name, True)
+    return self._get_properties(client, "Owner:", db_name, True)
 
-  def _get_properties(self, section_name, name, is_db=False):
+  @classmethod
+  def _get_properties(cls, client, section_name, name, is_db=False):
     """Extracts the db/table properties mapping from the output of DESCRIBE FORMATTED"""
-    result = self.client.execute("describe {0} formatted {1}".format(
+    result = client.execute("describe {0} formatted {1}".format(
       "database" if is_db else "", name))
     match = False
     properties = dict()
@@ -98,9 +101,10 @@ class TestDdlBase(ImpalaTestSuite):
         properties[fields[1].rstrip()] = fields[2].rstrip()
     return properties
 
-  def _get_property(self, property_name, name, is_db=False):
+  @classmethod
+  def _get_property(cls, property_name, client, name, is_db=False):
     """Extracts a db/table property value from the output of DESCRIBE FORMATTED."""
-    result = self.client.execute("describe {0} formatted {1}".format(
+    result = client.execute("describe {0} formatted {1}".format(
       "database" if is_db else "", name))
     for row in result.data:
       if property_name in row:
@@ -115,8 +119,8 @@ class TestDdlBase(ImpalaTestSuite):
     result = self.client.execute("describe database {0}".format(db_name))
     return result.data[0].split('\t')[2]
 
-  def _get_table_or_view_comment(self, table_name):
-    props = self._get_tbl_properties(table_name)
+  def _get_table_or_view_comment(self, client, table_name):
+    props = self._get_tbl_properties(client, table_name)
     return props["comment"] if "comment" in props else None
 
   def _get_column_comment(self, table_or_view_name, col_name):
@@ -128,9 +132,9 @@ class TestDdlBase(ImpalaTestSuite):
         comments[cols[0].rstrip()] = cols[2].rstrip()
     return comments.get(col_name)
 
-
-  def _get_table_or_view_owner(self, table_name):
+  @classmethod
+  def _get_table_or_view_owner(cls, client, table_name):
     """Returns a tuple(owner, owner_type) for a given table name"""
-    owner_name = self._get_property("Owner:", table_name)
-    owner_type = self._get_property("OwnerType:", table_name)
+    owner_name = cls._get_property("Owner:", client, table_name)
+    owner_type = cls._get_property("OwnerType:", client, table_name)
     return (owner_name, owner_type)

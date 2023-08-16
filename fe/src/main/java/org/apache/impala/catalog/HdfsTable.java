@@ -2811,6 +2811,20 @@ public class HdfsTable extends Table implements FeFsTable {
     Map<Partition, HdfsPartition> hmsPartToHdfsPart = new HashMap<>();
     try {
       hmsPartitions = MetaStoreUtil.fetchPartitionsByName(client, partNames, msTable_);
+      boolean syncToLatestEventId =
+          BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+      if (syncToLatestEventId) {
+        Path tblLocation = FileSystemUtil.createFullyQualifiedPath(getHdfsBaseDirPath());
+        // Consider a partitioned table with two partitions, one partition has write
+        // access and the other has read access. Then the accessLevel_ for the table is
+        // changed to READ_ONLY. If enable_sync_to_latest_event_on_ddls is disabled, then
+        // insert into existing partition that has write access changes the accessLevel_
+        // READ_WRITE, where as when enable_sync_to_latest_event_on_ddls is set to true
+        // accessLevel_ is not updated. So it is required to update the accessLevel_ when
+        // we are writing to the existing partitions.
+        accessLevel_ = getAvailableAccessLevel(getFullName(), tblLocation,
+            new FsPermissionCache());
+      }
       for (Partition partition : hmsPartitions) {
         List<LiteralExpr> partExprs = getTypeCompatiblePartValues(partition.getValues());
         HdfsPartition hdfsPartition = getPartition(partExprs);
@@ -2826,7 +2840,7 @@ public class HdfsTable extends Table implements FeFsTable {
       // them in the result of getPartitionsByNames.
       throw new TableLoadingException(
           "Error when reloading partitions for table " + getFullName(), e);
-    } catch (TException e2) {
+    } catch (TException | IOException e2) {
       throw new CatalogException(
           "Unexpected error while retrieving partitions for table " + getFullName(), e2);
     }

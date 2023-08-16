@@ -25,7 +25,8 @@ import time
 
 from beeswaxd.BeeswaxService import QueryState
 from copy import deepcopy
-from test_ddl_base import TestDdlBase
+from tests.metadata.test_common_ddl import TestCommonDdl
+from tests.metadata.test_ddl_base import TestDdlBase
 from tests.beeswax.impala_beeswax import ImpalaBeeswaxException
 from tests.common.environ import (HIVE_MAJOR_VERSION)
 from tests.common.file_utils import create_table_from_orc
@@ -56,8 +57,9 @@ def get_trash_path(bucket, path):
         getpass.getuser(), WAREHOUSE_PREFIX, path))
   return '/user/{0}/.Trash/Current/{1}/{2}'.format(getpass.getuser(), bucket, path)
 
+
 # Validates DDL statements (create, drop)
-class TestDdlStatements(TestDdlBase):
+class TestDdlStatements(TestCommonDdl, TestDdlBase):
   @SkipIfLocal.hdfs_client
   def test_drop_table_with_purge(self, unique_database):
     """This test checks if the table data is permanently deleted in
@@ -150,49 +152,8 @@ class TestDdlStatements(TestDdlBase):
   @SkipIfFS.eventually_consistent
   @SkipIfLocal.hdfs_client
   def test_truncate_cleans_hdfs_files(self, unique_database):
-    # Verify the db directory exists
-    assert self.filesystem_client.exists(
-        "{1}/{0}.db/".format(unique_database, WAREHOUSE))
-
-    self.client.execute("create table {0}.t1(i int)".format(unique_database))
-    # Verify the table directory exists
-    assert self.filesystem_client.exists(
-        "{1}/{0}.db/t1/".format(unique_database, WAREHOUSE))
-
-    try:
-      # If we're testing S3, we want the staging directory to be created.
-      self.client.execute("set s3_skip_insert_staging=false")
-      # Should have created one file in the table's dir
-      self.client.execute("insert into {0}.t1 values (1)".format(unique_database))
-      assert len(self.filesystem_client.ls(
-          "{1}/{0}.db/t1/".format(unique_database, WAREHOUSE))) == 2
-
-      # Truncating the table removes the data files and preserves the table's directory
-      self.client.execute("truncate table {0}.t1".format(unique_database))
-      assert len(self.filesystem_client.ls(
-          "{1}/{0}.db/t1/".format(unique_database, WAREHOUSE))) == 1
-
-      self.client.execute(
-          "create table {0}.t2(i int) partitioned by (p int)".format(unique_database))
-      # Verify the table directory exists
-      assert self.filesystem_client.exists(
-          "{1}/{0}.db/t2/".format(unique_database, WAREHOUSE))
-
-      # Should have created the partition dir, which should contain exactly one file
-      self.client.execute(
-          "insert into {0}.t2 partition(p=1) values (1)".format(unique_database))
-      assert len(self.filesystem_client.ls(
-          "{1}/{0}.db/t2/p=1".format(unique_database, WAREHOUSE))) == 1
-
-      # Truncating the table removes the data files and preserves the partition's directory
-      self.client.execute("truncate table {0}.t2".format(unique_database))
-      assert self.filesystem_client.exists(
-          "{1}/{0}.db/t2/p=1".format(unique_database, WAREHOUSE))
-      assert len(self.filesystem_client.ls(
-          "{1}/{0}.db/t2/p=1".format(unique_database, WAREHOUSE))) == 0
-    finally:
-      # Reset to its default value.
-      self.client.execute("set s3_skip_insert_staging=true")
+    TestCommonDdl._test_truncate_cleans_hdfs_files_impl(self.client,
+      self.filesystem_client, unique_database)
 
   @SkipIfFS.incorrent_reported_ec
   @UniqueDatabase.parametrize(sync_ddl=True)
@@ -231,51 +192,25 @@ class TestDdlStatements(TestDdlBase):
   def test_alter_database_set_owner(self, vector, unique_database):
     self.client.execute("alter database {0} set owner user foo_user".format(
       unique_database))
-    properties = self._get_db_owner_properties(unique_database)
+    properties = self._get_db_owner_properties(self.client, unique_database)
     assert len(properties) == 1
     assert {'foo_user': 'USER'} == properties
 
     self.client.execute("alter database {0} set owner role foo_role".format(
       unique_database))
-    properties = self._get_db_owner_properties(unique_database)
+    properties = self._get_db_owner_properties(self.client, unique_database)
     assert len(properties) == 1
     assert {'foo_role': 'ROLE'} == properties
 
   def test_metadata_after_alter_database(self, vector, unique_database):
-    self.client.execute("create table {0}.tbl (i int)".format(unique_database))
-    self.client.execute("create function {0}.f() returns int "
-                        "location '{1}/libTestUdfs.so' symbol='NoArgs'"
-                        .format(unique_database, WAREHOUSE))
-    self.client.execute("alter database {0} set owner user foo_user".format(
-      unique_database))
-    table_names = self.client.execute("show tables in {0}".format(
-      unique_database)).get_data()
-    assert "tbl" == table_names
-    func_names = self.client.execute("show functions in {0}".format(
-      unique_database)).get_data()
-    assert "INT\tf()\tNATIVE\ttrue" == func_names
+    TestCommonDdl._test_metadata_after_alter_database_impl(self.client, vector,
+      unique_database)
 
-  def test_alter_table_set_owner(self, vector, unique_database):
-    table_name = "{0}.test_owner_tbl".format(unique_database)
-    self.client.execute("create table {0}(i int)".format(table_name))
-    self.client.execute("alter table {0} set owner user foo_user".format(table_name))
-    owner = self._get_table_or_view_owner(table_name)
-    assert ('foo_user', 'USER') == owner
+  def test_alter_table_set_owner(self, unique_database):
+    TestCommonDdl._test_alter_table_set_owner_impl(self.client, unique_database)
 
-    self.client.execute("alter table {0} set owner role foo_role".format(table_name))
-    owner = self._get_table_or_view_owner(table_name)
-    assert ('foo_role', 'ROLE') == owner
-
-  def test_alter_view_set_owner(self, vector, unique_database):
-    view_name = "{0}.test_owner_tbl".format(unique_database)
-    self.client.execute("create view {0} as select 1".format(view_name))
-    self.client.execute("alter view {0} set owner user foo_user".format(view_name))
-    owner = self._get_table_or_view_owner(view_name)
-    assert ('foo_user', 'USER') == owner
-
-    self.client.execute("alter view {0} set owner role foo_role".format(view_name))
-    owner = self._get_table_or_view_owner(view_name)
-    assert ('foo_role', 'ROLE') == owner
+  def test_alter_view_set_owner(self, unique_database):
+    TestCommonDdl._test_alter_view_set_owner_impl(self.client, unique_database)
 
   # There is a query in QueryTest/create-table that references nested types, which is not
   # supported if old joins and aggs are enabled. Since we do not get any meaningful
@@ -337,46 +272,46 @@ class TestDdlStatements(TestDdlBase):
     table = '{0}.comment_table'.format(unique_database)
     self.client.execute("create table {0} (i int)".format(table))
 
-    comment = self._get_table_or_view_comment(table)
+    comment = self._get_table_or_view_comment(self.client, table)
     assert comment is None
 
     self.client.execute("comment on table {0} is 'comment'".format(table))
-    comment = self._get_table_or_view_comment(table)
+    comment = self._get_table_or_view_comment(self.client, table)
     assert "comment" == comment
 
     self.client.execute("comment on table {0} is ''".format(table))
-    comment = self._get_table_or_view_comment(table)
+    comment = self._get_table_or_view_comment(self.client, table)
     assert "" == comment
 
     self.client.execute("comment on table {0} is '\\'comment\\''".format(table))
-    comment = self._get_table_or_view_comment(table)
+    comment = self._get_table_or_view_comment(self.client, table)
     assert "\\\\'comment\\\\'" == comment
 
     self.client.execute("comment on table {0} is null".format(table))
-    comment = self._get_table_or_view_comment(table)
+    comment = self._get_table_or_view_comment(self.client, table)
     assert comment is None
 
   def test_comment_on_view(self, vector, unique_database):
     view = '{0}.comment_view'.format(unique_database)
     self.client.execute("create view {0} as select 1".format(view))
 
-    comment = self._get_table_or_view_comment(view)
+    comment = self._get_table_or_view_comment(self.client, view)
     assert comment is None
 
     self.client.execute("comment on view {0} is 'comment'".format(view))
-    comment = self._get_table_or_view_comment(view)
+    comment = self._get_table_or_view_comment(self.client, view)
     assert "comment" == comment
 
     self.client.execute("comment on view {0} is ''".format(view))
-    comment = self._get_table_or_view_comment(view)
+    comment = self._get_table_or_view_comment(self.client, view)
     assert "" == comment
 
     self.client.execute("comment on view {0} is '\\'comment\\''".format(view))
-    comment = self._get_table_or_view_comment(view)
+    comment = self._get_table_or_view_comment(self.client, view)
     assert "\\\\'comment\\\\'" == comment
 
     self.client.execute("comment on view {0} is null".format(view))
-    comment = self._get_table_or_view_comment(view)
+    comment = self._get_table_or_view_comment(self.client, view)
     assert comment is None
 
   def test_comment_on_column(self, vector, unique_database):
@@ -474,36 +409,8 @@ class TestDdlStatements(TestDdlBase):
 
   @SkipIfLocal.hdfs_client
   def test_drop_partition_with_purge(self, vector, unique_database):
-    """Verfies whether alter <tbl> drop partition purge actually skips trash"""
-    self.client.execute(
-        "create table {0}.t1(i int) partitioned by (j int)".format(unique_database))
-    # Add two partitions (j=1) and (j=2) to table t1
-    self.client.execute("alter table {0}.t1 add partition(j=1)".format(unique_database))
-    self.client.execute("alter table {0}.t1 add partition(j=2)".format(unique_database))
-    dbpath = "{1}/{0}.db".format(unique_database, WAREHOUSE)
-    self.filesystem_client.create_file("{}/t1/j=1/j1.txt".format(dbpath), file_data='j1')
-    self.filesystem_client.create_file("{}/t1/j=2/j2.txt".format(dbpath), file_data='j2')
-    # Drop the partition (j=1) without purge and make sure it exists in trash
-    self.client.execute("alter table {0}.t1 drop partition(j=1)".format(unique_database))
-    assert not self.filesystem_client.exists("{}/t1/j=1/j1.txt".format(dbpath))
-    assert not self.filesystem_client.exists("{}/t1/j=1".format(dbpath))
-    trash = get_trash_path("test-warehouse", unique_database + ".db")
-    assert self.filesystem_client.exists('{}/t1/j=1/j1.txt'.format(trash))
-    assert self.filesystem_client.exists('{}/t1/j=1'.format(trash))
-    # Drop the partition (with purge) and make sure it doesn't exist in trash
-    self.client.execute("alter table {0}.t1 drop partition(j=2) purge".\
-        format(unique_database));
-    if not IS_S3 and not IS_ADLS:
-      # In S3, deletes are eventual. So even though we dropped the partition, the files
-      # belonging to this partition may still be visible for some unbounded time. This
-      # happens only with PURGE. A regular DROP TABLE is just a copy of files which is
-      # consistent.
-      # The ADLS Python client is not strongly consistent, so these files may still be
-      # visible after a DROP. (Remove after IMPALA-5335 is resolved)
-      assert not self.filesystem_client.exists("{}/t1/j=2/j2.txt".format(dbpath))
-      assert not self.filesystem_client.exists("{}/t1/j=2".format(dbpath))
-    assert not self.filesystem_client.exists('{}/t1/j=2/j2.txt'.format(trash))
-    assert not self.filesystem_client.exists('{}/t1/j=2'.format(trash))
+    TestCommonDdl._test_drop_partition_with_purge_impl(self.client,
+      self.filesystem_client, vector, unique_database)
 
   @UniqueDatabase.parametrize(sync_ddl=True)
   def test_views_ddl(self, vector, unique_database):
@@ -619,135 +526,20 @@ class TestDdlStatements(TestDdlBase):
 
   @SkipIfLocal.hdfs_client
   def test_create_alter_bulk_partition(self, vector, unique_database):
-    # Change the scale depending on the exploration strategy, with 50 partitions this
-    # test runs a few minutes, with 10 partitions it takes ~50s for two configurations.
-    num_parts = 50 if self.exploration_strategy() == 'exhaustive' else 10
-    fq_tbl_name = unique_database + ".part_test_tbl"
-    self.client.execute("create table {0}(i int) partitioned by(j int, s string) "
-         "location '{1}/{0}'".format(fq_tbl_name, WAREHOUSE))
-
-    # Add some partitions (first batch of two)
-    for i in range(num_parts // 5):
-      start = time.time()
-      self.client.execute(
-          "alter table {0} add partition(j={1}, s='{1}')".format(fq_tbl_name, i))
-      LOG.info('ADD PARTITION #%d exec time: %s' % (i, time.time() - start))
-
-    # Modify one of the partitions
-    self.client.execute("alter table {0} partition(j=1, s='1')"
-        " set fileformat parquetfile".format(fq_tbl_name))
-
-    # Alter one partition to a non-existent location twice (IMPALA-741)
-    self.filesystem_client.delete_file_dir("tmp/dont_exist1/", recursive=True)
-    self.filesystem_client.delete_file_dir("tmp/dont_exist2/", recursive=True)
-
-    self.execute_query_expect_success(self.client,
-        "alter table {0} partition(j=1,s='1') set location '{1}/tmp/dont_exist1'"
-        .format(fq_tbl_name, WAREHOUSE))
-    self.execute_query_expect_success(self.client,
-        "alter table {0} partition(j=1,s='1') set location '{1}/tmp/dont_exist2'"
-        .format(fq_tbl_name, WAREHOUSE))
-
-    # Add some more partitions
-    for i in range(num_parts // 5, num_parts):
-      start = time.time()
-      self.client.execute(
-          "alter table {0} add partition(j={1},s='{1}')".format(fq_tbl_name, i))
-      LOG.info('ADD PARTITION #%d exec time: %s' % (i, time.time() - start))
-
-    # Insert data and verify it shows up.
-    self.client.execute(
-        "insert into table {0} partition(j=1, s='1') select 1".format(fq_tbl_name))
-    assert '1' == self.execute_scalar("select count(*) from {0}".format(fq_tbl_name))
+    TestCommonDdl._test_create_alter_bulk_partition_impl(self.client,
+      self.filesystem_client, unique_database)
 
   @SkipIfLocal.hdfs_client
   def test_alter_table_set_fileformat(self, vector, unique_database):
-    # Tests that SET FILEFORMAT clause is set for ALTER TABLE ADD PARTITION statement
-    fq_tbl_name = unique_database + ".p_fileformat"
-    self.client.execute(
-        "create table {0}(i int) partitioned by (p int)".format(fq_tbl_name))
-
-    # Add a partition with Parquet fileformat
-    self.execute_query_expect_success(self.client,
-        "alter table {0} add partition(p=1) set fileformat parquet"
-        .format(fq_tbl_name))
-
-    # Add two partitions with ORC fileformat
-    self.execute_query_expect_success(self.client,
-        "alter table {0} add partition(p=2) partition(p=3) set fileformat orc"
-        .format(fq_tbl_name))
-
-    result = self.execute_query_expect_success(self.client,
-        "SHOW PARTITIONS %s" % fq_tbl_name)
-
-    assert 1 == len([line for line in result.data if line.find("PARQUET") != -1])
-    assert 2 == len([line for line in result.data if line.find("ORC") != -1])
+    TestCommonDdl._test_alter_table_set_fileformat_impl(self.client, vector,
+      unique_database)
 
   def test_alter_table_create_many_partitions(self, vector, unique_database):
-    """
-    Checks that creating more partitions than the MAX_PARTITION_UPDATES_PER_RPC
-    batch size works, in that it creates all the underlying partitions.
-    """
-    self.client.execute(
-        "create table {0}.t(i int) partitioned by (p int)".format(unique_database))
-    MAX_PARTITION_UPDATES_PER_RPC = 500
-    alter_stmt = "alter table {0}.t add ".format(unique_database) + " ".join(
-        "partition(p=%d)" % (i,) for i in range(MAX_PARTITION_UPDATES_PER_RPC + 2))
-    self.client.execute(alter_stmt)
-    partitions = self.client.execute("show partitions {0}.t".format(unique_database))
-    # Show partitions will contain partition HDFS paths, which we expect to contain
-    # "p=val" subdirectories for each partition. The regexp finds all the "p=[0-9]*"
-    # paths, converts them to integers, and checks that wehave all the ones we
-    # expect.
-    PARTITION_RE = re.compile("p=([0-9]+)")
-    assert list(map(int, PARTITION_RE.findall(str(partitions)))) == \
-        list(range(MAX_PARTITION_UPDATES_PER_RPC + 2))
+    TestCommonDdl._test_alter_table_create_many_partitions_impl(self.client, vector,
+      unique_database)
 
   def test_create_alter_tbl_properties(self, vector, unique_database):
-    fq_tbl_name = unique_database + ".test_alter_tbl"
-
-    # Specify TBLPROPERTIES and SERDEPROPERTIES at CREATE time
-    self.client.execute("""create table {0} (i int)
-    with serdeproperties ('s1'='s2', 's3'='s4')
-    tblproperties ('p1'='v0', 'p1'='v1')""".format(fq_tbl_name))
-    properties = self._get_tbl_properties(fq_tbl_name)
-
-    if HIVE_MAJOR_VERSION > 2:
-      assert properties['OBJCAPABILITIES'] == 'EXTREAD,EXTWRITE'
-      assert properties['TRANSLATED_TO_EXTERNAL'] == 'TRUE'
-      assert properties['external.table.purge'] == 'TRUE'
-      assert properties['EXTERNAL'] == 'TRUE'
-      del properties['OBJCAPABILITIES']
-      del properties['TRANSLATED_TO_EXTERNAL']
-      del properties['external.table.purge']
-      del properties['EXTERNAL']
-    assert len(properties) == 2
-    # The transient_lastDdlTime is variable, so don't verify the value.
-    assert 'transient_lastDdlTime' in properties
-    del properties['transient_lastDdlTime']
-    assert {'p1': 'v1'} == properties
-
-    properties = self._get_serde_properties(fq_tbl_name)
-    assert {'s1': 's2', 's3': 's4'} == properties
-
-    # Modify the SERDEPROPERTIES using ALTER TABLE SET.
-    self.client.execute("alter table {0} set serdeproperties "
-        "('s1'='new', 's5'='s6')".format(fq_tbl_name))
-    properties = self._get_serde_properties(fq_tbl_name)
-    assert {'s1': 'new', 's3': 's4', 's5': 's6'} == properties
-
-    # Modify the TBLPROPERTIES using ALTER TABLE SET.
-    self.client.execute("alter table {0} set tblproperties "
-        "('prop1'='val1', 'p2'='val2', 'p2'='val3', ''='')".format(fq_tbl_name))
-    properties = self._get_tbl_properties(fq_tbl_name)
-
-    if HIVE_MAJOR_VERSION > 2:
-      assert 'OBJCAPABILITIES' in properties
-    assert 'transient_lastDdlTime' in properties
-    assert properties['p1'] == 'v1'
-    assert properties['prop1'] == 'val1'
-    assert properties['p2'] == 'val3'
-    assert properties[''] == ''
+    TestCommonDdl._test_create_alter_tbl_properties_impl(self.client, unique_database)
 
   @SkipIfHive2.acid
   def test_create_insertonly_tbl(self, vector, unique_database):
@@ -755,27 +547,12 @@ class TestDdlStatements(TestDdlBase):
     self.client.execute("""create table {0} (coli int) stored as parquet tblproperties(
         'transactional'='true', 'transactional_properties'='insert_only')"""
         .format(insertonly_tbl))
-    properties = self._get_tbl_properties(insertonly_tbl)
+    properties = self._get_tbl_properties(self.client, insertonly_tbl)
     assert properties['OBJCAPABILITIES'] == 'HIVEMANAGEDINSERTREAD,HIVEMANAGEDINSERTWRITE'
 
   def test_alter_tbl_properties_reload(self, vector, unique_database):
-    # IMPALA-8734: Force a table schema reload when setting table properties.
-    tbl_name = "test_tbl"
-    self.execute_query_expect_success(self.client, "create table {0}.{1} (c1 string)"
-                                      .format(unique_database, tbl_name))
-    self.filesystem_client.create_file("{2}/{0}.db/{1}/f".
-                                       format(unique_database, tbl_name, WAREHOUSE),
-                                       file_data="\nfoo\n")
-    self.execute_query_expect_success(self.client,
-                                      "alter table {0}.{1} set tblproperties"
-                                      "('serialization.null.format'='foo')"
-                                      .format(unique_database, tbl_name))
-    result = self.execute_query_expect_success(self.client,
-                                               "select * from {0}.{1}"
-                                               .format(unique_database, tbl_name))
-    assert len(result.data) == 2
-    assert result.data[0] == ''
-    assert result.data[1] == 'NULL'
+    TestCommonDdl._test_alter_tbl_properties_reload_impl(self.client,
+      self.filesystem_client, vector, unique_database)
 
   @SkipIfFS.incorrent_reported_ec
   @UniqueDatabase.parametrize(sync_ddl=True)
@@ -827,7 +604,7 @@ class TestDdlStatements(TestDdlBase):
     self.execute_query_expect_success(
         self.client, "create table {0}(i int)".format(non_acid_table),
         {"default_transactional_type": "none"})
-    props = self._get_properties("Table Parameters", non_acid_table)
+    props = self._get_properties(self.client, "Table Parameters", non_acid_table)
     assert "transactional" not in props
     assert "transactional_properties" not in props
 
@@ -836,7 +613,7 @@ class TestDdlStatements(TestDdlBase):
     self.execute_query_expect_success(
         self.client, "create table {0}(i int)".format(insert_only_acid_table),
         {"default_transactional_type": "insert_only"})
-    props = self._get_properties("Table Parameters", insert_only_acid_table)
+    props = self._get_properties(self.client, "Table Parameters", insert_only_acid_table)
     assert props["transactional"] == "true"
     assert props["transactional_properties"] == "insert_only"
 
@@ -845,7 +622,7 @@ class TestDdlStatements(TestDdlBase):
     self.execute_query_expect_success(
         self.client, "create external table {0}(i int)".format(external_table),
         {"default_transactional_type": "insert_only"})
-    props = self._get_properties("Table Parameters", external_table)
+    props = self._get_properties(self.client, "Table Parameters", external_table)
     assert "transactional" not in props
     assert "transactional_properties" not in props
 
@@ -855,7 +632,7 @@ class TestDdlStatements(TestDdlBase):
         self.client,
         "create table {0}(i int primary key) stored as kudu".format(kudu_table),
         {"default_transactional_type": "insert_only"})
-    props = self._get_properties("Table Parameters", kudu_table)
+    props = self._get_properties(self.client, "Table Parameters", kudu_table)
     assert "transactional" not in props
     assert "transactional_properties" not in props
 
@@ -866,7 +643,7 @@ class TestDdlStatements(TestDdlBase):
         self.client, "create table {0}(i int) TBLPROPERTIES ('transactional'='false')"
             .format(manual_acid_table),
         {"default_transactional_type": "insert_only"})
-    props = self._get_properties("Table Parameters", manual_acid_table)
+    props = self._get_properties(self.client, "Table Parameters", manual_acid_table)
     assert "transactional" not in props
     assert "transactional_properties" not in props
 

@@ -950,6 +950,15 @@ class ImpalaTestSuite(BaseTestSuite):
     assert len(result.data) <= 1, 'Multiple values returned from scalar'
     return result.data[0] if len(result.data) == 1 else None
 
+  @classmethod
+  @execute_wrapper
+  def execute_scalar_expect_success(cls, impalad_client, query, query_options=None,
+      user=None):
+    """Executes a query and asserts if the query fails"""
+    result = cls.__execute_query(impalad_client, query, query_options, user)
+    assert len(result.data) <= 1, 'Multiple values returned from scalar'
+    return result.data[0] if len(result.data) == 1 else None
+
   def exec_and_compare_hive_and_impala_hs2(self, stmt, compare = lambda x, y: x == y):
     """Compare Hive and Impala results when executing the same statment over HS2"""
     # execute_using_jdbc expects a Query object. Convert the query string into a Query
@@ -1033,11 +1042,13 @@ class ImpalaTestSuite(BaseTestSuite):
 
   # TODO(todd) make this use Thrift to connect to HS2 instead of shelling
   # out to beeline for better performance
+  @classmethod
   def run_stmt_in_hive(self, stmt, username=None):
     """Run a statement in Hive by Beeline."""
     url = 'jdbc:hive2://' + pytest.config.option.hive_server2
     return self.run_stmt_in_beeline(url, username, stmt)
 
+  @classmethod
   def run_stmt_in_beeline(self, url, username, stmt):
     """
     Run a statement by Beeline, returning stdout if successful and throwing

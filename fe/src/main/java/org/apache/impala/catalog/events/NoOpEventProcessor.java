@@ -17,6 +17,8 @@
 
 package org.apache.impala.catalog.events;
 
+import java.util.ArrayList;
+import java.util.List;
 import com.codahale.metrics.Gauge;
 import org.apache.hadoop.hive.metastore.api.NotificationEvent;
 import org.apache.impala.catalog.CatalogException;
@@ -99,7 +101,16 @@ public class NoOpEventProcessor implements ExternalEventsProcessor {
 
   @Override
   public EventFactory getEventsFactory() {
-    return (hmsEvent, metrics) -> null;
+    return new EventFactory(){
+      public MetastoreEvent get(NotificationEvent hmsEvent, Metrics metrics)
+          throws MetastoreNotificationException{
+        return null;
+      }
+      public List<MetastoreEvent> getFilteredEvents(List<NotificationEvent> events,
+          Metrics metrics) throws MetastoreNotificationException {
+        return new ArrayList<>();
+      }
+    };
   }
 
   @Override

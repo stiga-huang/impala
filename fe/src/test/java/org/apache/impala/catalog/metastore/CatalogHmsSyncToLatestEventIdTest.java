@@ -34,11 +34,19 @@ import org.apache.impala.catalog.events.MetastoreEventsProcessor;
 import org.apache.impala.catalog.MetastoreApiTestUtils;
 import org.apache.impala.catalog.events.NoOpEventProcessor;
 import org.apache.impala.catalog.events.SynchronousHMSEventProcessorForTests;
+import org.apache.impala.catalog.events.MetastoreEventsProcessorTest;
 import org.apache.impala.service.BackendConfig;
 import org.apache.impala.service.CatalogOpExecutor;
 import org.apache.impala.service.MetadataOp;
 import org.apache.impala.testutil.CatalogServiceTestCatalog;
 import org.apache.impala.testutil.CatalogTestMetastoreServer;
+import org.apache.impala.thrift.TCatalogServiceRequestHeader;
+import org.apache.impala.thrift.TDdlExecRequest;
+import org.apache.impala.thrift.TOwnerType;
+import org.apache.impala.thrift.TPartitionDef;
+import org.apache.impala.thrift.TPartitionKeyValue;
+import org.apache.impala.thrift.TResetMetadataRequest;
+import org.apache.impala.thrift.TTableName;
 import org.apache.thrift.TException;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -58,7 +66,9 @@ import org.apache.hadoop.hive.metastore.api.CurrentNotificationEventId;
 import org.apache.impala.catalog.CatalogException;
 import org.apache.impala.compat.MetastoreShim;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 
@@ -91,6 +101,7 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
         org.apache.hadoop.hive.metastore.TableType.EXTERNAL_TABLE.toString();
     private static boolean flagEnableCatalogCache ,flagInvalidateCache,
         flagSyncToLatestEventId;
+    private static MetastoreEventsProcessorTest msEventsProcessorTest_;
 
     @BeforeClass
     public static void setup() throws Exception {
@@ -106,6 +117,7 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
                     catalogOpExecutor_, currentNotificationId.getEventId(), 10L);
             eventsProcessor_.start();
         }
+        msEventsProcessorTest_ = new MetastoreEventsProcessorTest();
         // Don't set event processor in catalog because
         // sync to latest event id should work even if event processor
         // is disabled
@@ -191,7 +203,7 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
     @Test
     public void testAlterDatabase() throws Exception {
         LOG.info("Executing testAlterDatabase");
-        String dbName = "test_alter_database";
+        String dbName = TEST_DB_NAME;
         try {
             createDatabaseInCatalog(dbName);
             eventsProcessor_.processEvents();
@@ -217,9 +229,25 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
             assertTrue(catalogDb.getLastSyncedEventId() >
                 prevSyncedEventId);
             eventsProcessor_.processEvents();
+            prevSyncedEventId = catalogDb.getLastSyncedEventId();
             long currentSkippedEventsCount = eventsProcessor_.getMetrics()
                 .getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).getCount();
             assertTrue(lastSkippedEventsCount + 2 == currentSkippedEventsCount);
+            lastSkippedEventsCount = currentSkippedEventsCount;
+            // change Database owner via Impala (Catalog-Op-Executor)
+            String newImpalaOwner = "impalaSync";
+            TDdlExecRequest req = msEventsProcessorTest_.getAlterDbSetOwnerFromImpalaReq(
+                dbName, newImpalaOwner, TOwnerType.USER);
+            catalogOpExecutor_.execDdlRequest(req);
+            catalogDb = catalog_.getDb(dbName);
+            assertTrue(catalogDb.getOwnerUser().equals(newImpalaOwner));
+            assertTrue(catalogDb.getMetaStoreDb().getParameters()
+                .get("key1").equals("val1"));
+            assertTrue(catalogDb.getLastSyncedEventId() > prevSyncedEventId);
+            eventsProcessor_.processEvents();
+            currentSkippedEventsCount = eventsProcessor_.getMetrics()
+                .getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).getCount();
+            assertTrue(lastSkippedEventsCount + 1 == currentSkippedEventsCount);
         } finally {
             catalogHmsClient_.dropDatabase(dbName, true, true, true);
         }
@@ -255,6 +283,7 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
             partVals.add(Arrays.asList("1"));
             partVals.add(Arrays.asList("2"));
             partVals.add(Arrays.asList("3"));
+            partVals.add(Arrays.asList("4"));
             addPartitionsInHms(TEST_DB_NAME, tblName, partVals);
             // added partitions should not reflect in table
             // stored in catalog cache
@@ -273,20 +302,56 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
             catalogHmsClient_.dropPartition(TEST_DB_NAME, tblName,
                 Arrays.asList("3"), true);
             tbl = getCatalogHdfsTable(TEST_DB_NAME, tblName);
-            assertTrue("Table should have 2 partitions after dropping 1 "
-                    + "out of 3 partitions", tbl.getPartitions().size() == 2);
+            long prevVersion = tbl.getCatalogVersion();
+            // Do a drop partition from Impala (catalog-op-executor)
+            TPartitionKeyValue partitionKeyValue1 = new TPartitionKeyValue("p1", "1");
+            TDdlExecRequest req = msEventsProcessorTest_.getAlterTableDropPartitionReq(
+                TEST_DB_NAME, tblName, Arrays.asList(partitionKeyValue1));
+            catalogOpExecutor_.execDdlRequest(req);
+            tbl = getCatalogHdfsTable(TEST_DB_NAME, tblName);
+            // Compare table catalog version after drop partition from Impala
+            // We increment catalog version first time in CatalogOpExecutor(for batch
+            // processing in event processor) but we don't set it on table, we again
+            // increment the version in CatalogServiceCatalog for reloading the cache
+            assertTrue(tbl.getCatalogVersion() == prevVersion + 2);
+            // Modify the partition location from Impala (catalog-op-executor)
+            TPartitionKeyValue partitionKeyValue2 = new TPartitionKeyValue("p1", "4");
+            req = msEventsProcessorTest_.getAlterTableSetLocationFromImpalaReq(
+                TEST_DB_NAME, tblName, newLocation, Arrays.asList(partitionKeyValue2));
+            catalogOpExecutor_.execDdlRequest(req);
+            // get the cached table and verify the partition count
+            tbl = getCatalogHdfsTable(TEST_DB_NAME, tblName);
+            assertTrue("Table should have 2 partition after dropping 2 "
+                    + "out of 4 partitions", tbl.getPartitions().size() == 2);
 
-            // assert that  partition with new location from cached table
+            // assert that 2 partitions with new location from cached table
             // exists
+            int countOfModifiedPartitions = 0;
             FeFsPartition modifiedPartition = null;
             for (FeFsPartition part : FeCatalogUtils.loadAllPartitions(tbl)) {
                 if (part.getLocation().equals(newLocation)) {
                     modifiedPartition = part;
-                    break;
+                    countOfModifiedPartitions++;
                 }
             }
+            assertTrue("Table should have 2 modified partitions",
+                countOfModifiedPartitions == 2);
             assertTrue(modifiedPartition != null);
             assertTrue(tbl.getLastSyncedEventId() > prevSyncedEventId);
+            prevSyncedEventId = tbl.getLastSyncedEventId();
+            prevVersion = tbl.getCatalogVersion();
+            // Add partition via Impala (Catalog-Op Executor)
+            TPartitionDef partitionDef = new TPartitionDef();
+            partitionDef.addToPartition_spec(new TPartitionKeyValue("p1", "2022"));
+            req = msEventsProcessorTest_.getAlterTableAddPartitionReq(
+                TEST_DB_NAME, tblName, partitionDef);
+            catalogOpExecutor_.execDdlRequest(req);
+            tbl = getCatalogHdfsTable(TEST_DB_NAME, tblName);
+            assertTrue("Table should have 3 partitions after adding 1 "
+                + "on the existing 2 partitions", tbl.getPartitions().size() == 3);
+            assertTrue(tbl.getLastSyncedEventId() > prevSyncedEventId);
+            // Compare table catalog version after add partition from Impala
+            assertTrue(tbl.getCatalogVersion() == prevVersion + 2);
             // test that events processor skipped all events
             // since last synced event
             eventsProcessor_.processEvents();
@@ -294,9 +359,8 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
                 .getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).getCount();
 
             assertTrue( String.format("CurrentSkippedCount %s differs from "
-                        + "lastSkippedCount + 3 %s", currentSkippedCount,
-                    lastSkippedCount),
-                currentSkippedCount == lastSkippedCount + 3);
+                        + "lastSkippedCount + 6 %s", currentSkippedCount,
+                    lastSkippedCount), currentSkippedCount == lastSkippedCount + 6);
         } finally {
             catalogHmsClient_.dropTable(TEST_DB_NAME, tblName, true, true);
         }
@@ -378,6 +442,19 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
             try (MetaStoreClient msClient = catalog_.getMetaStoreClient()) {
                 msClient.getHiveClient().dropTable(TEST_DB_NAME, tblName, true, false);
             }
+            // create table from Impala (catalog-op-executor)
+            TDdlExecRequest req = msEventsProcessorTest_.getCreateTableFromImpalaReq(
+                TEST_DB_NAME, tblName, null, true);
+            catalogOpExecutor_.execDdlRequest(req);
+            Table newTbl = catalog_.getTable(TEST_DB_NAME, tblNameLowerCase);
+            assertTrue(newTbl instanceof IncompleteTable);
+            assertTrue(newTbl.getLastSyncedEventId() != prevCreateEventId);
+            prevCreateEventId = newTbl.getLastSyncedEventId();
+            // drop table from Impala
+            req = msEventsProcessorTest_.getDropTableFromImpalaReq(TEST_DB_NAME,
+                tblNameLowerCase);
+            catalogOpExecutor_.execDdlRequest(req);
+            eventsProcessor_.processEvents();
             // recreate table with same name but unpartitioned to distinguish it
             // from previous table
             catalogHmsClient_.createTable(MetastoreApiTestUtils.getTestTable(null,
@@ -446,12 +523,27 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
             assertTrue(updatedTbl.getMetaStoreTable().getSd().equals(updatedSd));
             assertTrue(
                 updatedTbl.getLastSyncedEventId() > prevSyncedEventId);
+            prevSyncedEventId = updatedTbl.getLastSyncedEventId();
             // assert that alter table events are skipped by event processor
             eventsProcessor_.processEvents();
             long currentSkippedEventsCount = eventsProcessor_.getMetrics()
                 .getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).getCount();
             assertTrue(lastSkippedEventsCount + 2 == currentSkippedEventsCount);
-
+            lastSkippedEventsCount = currentSkippedEventsCount;
+            // add table parameters via Impala
+            TDdlExecRequest req = msEventsProcessorTest_.getTblPropertiesFromImpalaReq(
+                TEST_DB_NAME, tblName);
+            catalogOpExecutor_.execDdlRequest(req);
+            updatedTbl = getCatalogHdfsTable(TEST_DB_NAME, tblName);
+            assertTrue(updatedTbl.getOwnerUser().equals(newOwner));
+            assertNotNull(updatedTbl.getMetaStoreTable().getParameters());
+            assertEquals("dummyValue1",
+                updatedTbl.getMetaStoreTable().getParameters().get("dummyKey1"));
+            // Verify that the alter event is skipped by event processor
+            eventsProcessor_.processEvents();
+            currentSkippedEventsCount = eventsProcessor_.getMetrics()
+                .getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).getCount();
+            assertTrue(lastSkippedEventsCount + 1 == currentSkippedEventsCount);
         } finally {
             catalogHmsClient_.dropTable(TEST_DB_NAME, tblName, true, true);
         }
@@ -485,6 +577,19 @@ public class CatalogHmsSyncToLatestEventIdTest extends AbstractCatalogMetastoreT
             assertTrue(newTbl.getLastSyncedEventId() > -1);
             eventsProcessor_.processEvents();
             long currentSkippedEventsCount = eventsProcessor_.getMetrics()
+                .getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).getCount();
+            assertTrue( lastSkippedEventsCount + 1 == currentSkippedEventsCount);
+            lastSkippedEventsCount = currentSkippedEventsCount;
+            // Rename table from 'newTblName' to old 'tblName' via Impala
+            TDdlExecRequest req = msEventsProcessorTest_.getRenameTableFromImpalaReq(
+                TEST_DB_NAME, newTblName, tblName);
+            catalogOpExecutor_.execDdlRequest(req);
+            // check that old table 'newTblName' does not exist in cache
+            assertTrue(catalog_.getTableNoThrow(TEST_DB_NAME, newTblName) == null);
+            Table renameTbl = catalog_.getTable(TEST_DB_NAME, tblName);
+            assertTrue(renameTbl instanceof IncompleteTable);
+            eventsProcessor_.processEvents();
+            currentSkippedEventsCount = eventsProcessor_.getMetrics()
                 .getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).getCount();
             assertTrue( lastSkippedEventsCount + 1 == currentSkippedEventsCount);
         } finally {

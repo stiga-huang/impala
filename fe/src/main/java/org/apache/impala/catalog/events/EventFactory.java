@@ -17,6 +17,8 @@
 
 package org.apache.impala.catalog.events;
 
+import java.util.List;
+
 import org.apache.hadoop.hive.metastore.api.NotificationEvent;
 import org.apache.impala.catalog.events.MetastoreEvents.MetastoreEvent;
 import org.apache.impala.common.Metrics;
@@ -37,4 +39,7 @@ public interface EventFactory {
    */
   MetastoreEvent get(NotificationEvent hmsEvent, Metrics metrics)
       throws MetastoreNotificationException;
+
+  List<MetastoreEvent> getFilteredEvents(List<NotificationEvent> events,
+      Metrics metrics) throws MetastoreNotificationException;
 }

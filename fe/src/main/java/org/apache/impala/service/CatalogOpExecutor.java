@@ -152,6 +152,7 @@ import org.apache.impala.common.ImpalaException;
 import org.apache.impala.common.ImpalaRuntimeException;
 import org.apache.impala.common.InternalException;
 import org.apache.impala.common.JniUtil;
+import org.apache.impala.common.Metrics;
 import org.apache.impala.common.Pair;
 import org.apache.impala.common.Reference;
 import org.apache.impala.common.TransactionException;
@@ -1135,16 +1136,22 @@ public class CatalogOpExecutor {
           if(params.isSetSet_file_format_params()) {
             format = params.getSet_file_format_params().file_format;
           }
+          // Hdfs table will not be updated in alterTableAddPartitions() if
+          // 'syncToLatestEventId' flag is set.
           refreshedTable = alterTableAddPartitions(tbl, params.getAdd_partition_params(),
               format);
           if (refreshedTable != null) {
-            refreshedTable.setCatalogVersion(newCatalogVersion);
-            // the alter table event is only generated when we add the partition. For
-            // instance if not exists clause is provided and the partition is
-            // pre-existing there is no alter table event generated. Hence we should
-            // only add the versions for in-flight events when we are sure that the
-            // partition was really added.
-            catalog_.addVersionsForInflightEvents(false, tbl, newCatalogVersion);
+            boolean syncToLatestEventId =
+                BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+            if (!syncToLatestEventId) {
+              refreshedTable.setCatalogVersion(newCatalogVersion);
+              // the alter table event is only generated when we add the partition. For
+              // instance if not exists clause is provided and the partition is
+              // pre-existing there is no alter table event generated. Hence we should
+              // only add the versions for in-flight events when we are sure that the
+              // partition was really added.
+              catalog_.addVersionsForInflightEvents(false, tbl, newCatalogVersion);
+            }
           }
           reloadMetadata = false;
           responseSummaryMsg = "New partition has been added to the table.";
@@ -1169,12 +1176,18 @@ public class CatalogOpExecutor {
           // with an updated catalog version. If the partition does not exist and
           // "IfExists" is true, null is returned. If "purge" option is specified
           // partition data is purged by skipping Trash, if configured.
+          // Also, Hdfs table will not be updated in alterTableDropPartition() if
+          // 'syncToLatestEventId' flag is set.
           refreshedTable = alterTableDropPartition(
               tbl, dropPartParams.getPartition_set(),
               dropPartParams.isIf_exists(),
               dropPartParams.isPurge(), numUpdatedPartitions);
           if (refreshedTable != null) {
-            refreshedTable.setCatalogVersion(newCatalogVersion);
+            boolean syncToLatestEventId =
+                BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+            if (!syncToLatestEventId) {
+              refreshedTable.setCatalogVersion(newCatalogVersion);
+            }
             // we don't need to add catalog versions in partition's InflightEvents here
             // since by the time the event is received, the partition is already
             // removed from catalog and there is nothing to compare against during
@@ -1296,10 +1309,9 @@ public class CatalogOpExecutor {
           throw new UnsupportedOperationException(
               "Unknown ALTER TABLE operation type: " + params.getAlter_type());
       }
-
       // Make sure we won't forget finalizing the modification.
       if (tbl.hasInProgressModification()) Preconditions.checkState(reloadMetadata);
-      if (reloadMetadata) {
+      if (!trySyncToLatestEventId(tbl) && reloadMetadata) {
         loadTableMetadata(tbl, newCatalogVersion, reloadFileMetadata,
             reloadTableSchema, null, "ALTER TABLE " + params.getAlter_type().name());
         // now that HMS alter operation has succeeded, add this version to list of
@@ -1688,18 +1700,20 @@ public class CatalogOpExecutor {
         LOG.trace(String.format("Altering view %s", tableName));
       }
       applyAlterTable(msTbl);
-      long eventId = -1L;
-      try (MetaStoreClient msClient = catalog_.getMetaStoreClient()) {
-        eventId = MetastoreEventsProcessor.getCurrentEventIdNoThrow(
-            msClient.getHiveClient());
-        tbl.load(true, msClient.getHiveClient(), msTbl, "ALTER VIEW");
+      if (!trySyncToLatestEventId(tbl)) {
+        long eventId = -1L;
+        try (MetaStoreClient msClient = catalog_.getMetaStoreClient()) {
+          eventId = MetastoreEventsProcessor.getCurrentEventIdNoThrow(
+              msClient.getHiveClient());
+          tbl.load(true, msClient.getHiveClient(), msTbl, "ALTER VIEW");
+        }
+        tbl.setCatalogVersion(newCatalogVersion);
+        // Update the last refresh event id at table level
+        if (eventId > tbl.getLastRefreshEventId()) {
+          tbl.setLastRefreshEventId(eventId);
+        }
       }
       addSummary(resp, "View has been altered.");
-      tbl.setCatalogVersion(newCatalogVersion);
-      // Update the last refresh event id at table level
-      if (eventId > tbl.getLastRefreshEventId()) {
-        tbl.setLastRefreshEventId(eventId);
-      }
       addTableToCatalogUpdate(tbl, wantMinimalResult, resp.result);
     } finally {
       UnlockWriteLockIfErronouslyLocked();
@@ -2559,9 +2573,11 @@ public class CatalogOpExecutor {
           }
         }
       }
-      loadTableMetadata(table, newCatalogVersion, /*reloadFileMetadata=*/false,
-          /*reloadTableSchema=*/true, /*partitionsToUpdate=*/null, "DROP STATS");
-      catalog_.addVersionsForInflightEvents(false, table, newCatalogVersion);
+      if (!trySyncToLatestEventId(table) || table instanceof FeIcebergTable) {
+        loadTableMetadata(table, newCatalogVersion, /*reloadFileMetadata=*/false,
+            /*reloadTableSchema=*/true, /*partitionsToUpdate=*/null, "DROP STATS");
+        catalog_.addVersionsForInflightEvents(false, table, newCatalogVersion);
+      }
       addTableToCatalogUpdate(table, wantMinimalResult, resp.result);
       addSummary(resp, "Stats have been dropped.");
     } finally {
@@ -2622,8 +2638,12 @@ public class CatalogOpExecutor {
         msTbl.getParameters().remove(StatsSetupConst.ROW_COUNT) != null;
     boolean droppedTotalSize =
         msTbl.getParameters().remove(StatsSetupConst.TOTAL_SIZE) != null;
-
-    if (droppedRowCount || droppedTotalSize) {
+    boolean syncToLatestEventId =
+        BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+    // when syncToLatestEventId is set, fire an alter_table event because, stats may
+    // not exist for a truncate table operation. So to keep file metadata up-to-date,
+    // it is necessary to fire alter_table event.
+    if (droppedRowCount || droppedTotalSize || syncToLatestEventId) {
       applyAlterTable(msTbl, false, null);
       ++numTargetedPartitions;
     }
@@ -3149,8 +3169,16 @@ public class CatalogOpExecutor {
       }
       Preconditions.checkState(newCatalogVersion > 0);
       addSummary(resp, "Table has been truncated.");
-      loadTableMetadata(table, newCatalogVersion, true, true, null, "TRUNCATE");
-      catalog_.addVersionsForInflightEvents(false, table, newCatalogVersion);
+      try (MetaStoreClient msClient = catalog_.getMetaStoreClient()) {
+        IMetaStoreClient hmsClient = msClient.getHiveClient();
+        boolean isIcebergTable = table instanceof FeIcebergTable;
+        HdfsTable hdfsTable = isIcebergTable ? null : (HdfsTable) table;
+        if (isIcebergTable || !(isTableBeingReplicated(hmsClient, hdfsTable) &&
+            trySyncToLatestEventId(table))) {
+          loadTableMetadata(table, newCatalogVersion, true, true, null, "TRUNCATE");
+          catalog_.addVersionsForInflightEvents(false, table, newCatalogVersion);
+        }
+      }
       addTableToCatalogUpdate(table, wantMinimalResult, resp.result);
     } finally {
       UnlockWriteLockIfErronouslyLocked();
@@ -3199,10 +3227,12 @@ public class CatalogOpExecutor {
         TblTransaction tblTxn = MetastoreShim.createTblTransaction(hmsClient,
             table.getMetaStoreTable(), txn.getId());
         HdfsTable hdfsTable = (HdfsTable) table;
-        // if the table is replicated we should use the HMS API to truncate it so that
-        // if moves the files into in replication change manager location which is later
-        // used for replication.
-        if (isTableBeingReplicated(hmsClient, hdfsTable)) {
+        boolean syncToLatestEventId =
+            BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+        // if the table is replicated or syncToLatestEventId is enabled we should use the
+        // HMS API to truncate it so that if moves the files into in replication change
+        // manager location which is later used for replication.
+        if (isTableBeingReplicated(hmsClient, hdfsTable) || syncToLatestEventId) {
           String dbName = Preconditions.checkNotNull(hdfsTable.getDb()).getName();
           MetastoreShim.truncateTable(hmsClient, dbName, hdfsTable.getName(), null,
               tblTxn.validWriteIds, tblTxn.writeId);
@@ -3314,25 +3344,27 @@ public class CatalogOpExecutor {
       // if the table is being replicated we issue the HMS API to truncate the table
       // since it generates additional events which are used by Hive Replication.
       try (MetaStoreClient metaStoreClient = catalog_.getMetaStoreClient()) {
-        if (isTableBeingReplicated(metaStoreClient.getHiveClient(), hdfsTable)) {
+        boolean syncToLatestEventId =
+            BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+        if (isTableBeingReplicated(metaStoreClient.getHiveClient(), hdfsTable) ||
+            syncToLatestEventId) {
           isTableBeingReplicated = true;
           String dbName = Preconditions.checkNotNull(hdfsTable.getDb()).getName();
           metaStoreClient.getHiveClient()
               .truncateTable(dbName, hdfsTable.getName(), null);
           LOG.trace("Time elapsed after truncating table {} using HMS API: {} msec",
               hdfsTable.getFullName(), sw.elapsed(TimeUnit.MILLISECONDS));
+        } else {
+          // when table is replicated we let the HMS API handle the file deletion logic
+          // otherwise we delete the files.
+          Collection<? extends FeFsPartition> parts = FeCatalogUtils
+              .loadAllPartitions(hdfsTable);
+          for (FeFsPartition part : parts) {
+            FileSystemUtil.deleteAllVisibleFiles(new Path(part.getLocation()));
+          }
+          LOG.trace("Time elapsed after deleting files for table {}: {} msec",
+              table.getFullName(), sw.elapsed(TimeUnit.MILLISECONDS));
         }
-      }
-      if (!isTableBeingReplicated) {
-        // when table is replicated we let the HMS API handle the file deletion logic
-        // otherwise we delete the files.
-        Collection<? extends FeFsPartition> parts = FeCatalogUtils
-            .loadAllPartitions(hdfsTable);
-        for (FeFsPartition part : parts) {
-          FileSystemUtil.deleteAllVisibleFiles(new Path(part.getLocation()));
-        }
-        LOG.trace("Time elapsed after deleting files for table {}: {} msec",
-            table.getFullName(), sw.elapsed(TimeUnit.MILLISECONDS));
       }
       if (params.isDelete_stats()) {
         dropColumnStats(table);
@@ -4347,11 +4379,11 @@ public class CatalogOpExecutor {
 
   /**
    * Adds new partitions to the given table in HMS. Also creates and adds new
-   * HdfsPartitions to the corresponding HdfsTable. Returns the table object with an
-   * updated catalog version or null if the table is not altered because all the
-   * partitions already exist and IF NOT EXISTS is specified.
-   * If IF NOT EXISTS is not used and there is a conflict with the partitions that already
-   * exist in HMS or catalog cache, then:
+   * HdfsPartitions to the corresponding HdfsTable if 'enableSyncToLatestEventOnDdls' is
+   * false. Returns the table object with an updated catalog version or null if the table
+   * is not altered because all the partitions already exist and IF NOT EXISTS is
+   * specified. If IF NOT EXISTS is not used and there is a conflict with the partitions
+   * that already exist in HMS or catalog cache, then:
    * - HMS and catalog cache are left intact, and
    * - ImpalaRuntimeException is thrown.
    * If IF NOT EXISTS is used, conflicts are handled as follows:
@@ -4417,7 +4449,12 @@ public class CatalogOpExecutor {
         addedHmsPartitions.addAll(
             getPartitionsFromHms(msTbl, msClient, difference));
       }
-      addHdfsPartitions(msClient, tbl, addedHmsPartitions, partitionToEventId);
+      boolean syncToLatestEventId =
+          BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+      if (!syncToLatestEventId) { // Don't modify the cache yet,
+        // MetaStoreEventsProcessor#syncToLatestEventId() will take care of it.
+        addHdfsPartitions(msClient, tbl, addedHmsPartitions, partitionToEventId);
+      }
     }
     return tbl;
   }
@@ -5213,8 +5250,8 @@ public class CatalogOpExecutor {
 
   /**
    * Drops existing partitions from the given table in Hive. If a partition is cached,
-   * the associated cache directive will also be removed.
-   * Also drops the corresponding partitions from its Hdfs table.
+   * the associated cache directive will also be removed. Also drops the corresponding
+   * partitions from its Hdfs table if 'enableSyncToLatestEventOnDdls' is false.
    * Returns the table object with an updated catalog version. If none of the partitions
    * exists and "IfExists" is true, null is returned. If purge is true, partition data is
    * permanently deleted. numUpdatedPartitions is used to inform the client how many
@@ -5284,7 +5321,15 @@ public class CatalogOpExecutor {
           String.format(HMS_RPC_ERROR_FORMAT_STR, "dropPartition"), e);
     }
     numUpdatedPartitions.setRef(numTargetedPartitions);
-    Table retTbl = catalog_.dropPartitions(tbl, partitionSet);
+    Table retTbl = null;
+    boolean syncToLatestEventId =
+        BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+    if (syncToLatestEventId) { // Don't modify the cache yet,
+      // MetaStoreEventsProcessor#syncToLatestEventId() will take care of it.
+      retTbl = tbl;
+    } else {
+      retTbl = catalog_.dropPartitions(tbl, partitionSet);
+    }
     for (Entry<Long, List<List<String>>> eventToPartitionNames : droppedPartsFromEvent
         .entrySet()) {
       //TODO we add partitions one by one above and hence we expect each event to contain
@@ -6018,7 +6063,12 @@ public class CatalogOpExecutor {
         MetaStoreClient msClient = catalog_.getMetaStoreClient()) {
       List<Partition> addedPartitions = addHmsPartitions(msClient, tbl, hmsPartitions,
           partitionToEventId, true);
-      addHdfsPartitions(msClient, tbl, addedPartitions, partitionToEventId);
+      boolean syncToLatestEventId =
+          BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+      if (!syncToLatestEventId) { // Don't modify the cache yet,
+        // MetaStoreEventsProcessor#syncToLatestEventId() will take care of it.
+        addHdfsPartitions(msClient, tbl, addedPartitions, partitionToEventId);
+      }
       // Handle HDFS cache.
       if (cachePoolName != null) {
         int numDone = 0;
@@ -6638,7 +6688,6 @@ public class CatalogOpExecutor {
     TResetMetadataResponse resp = new TResetMetadataResponse();
     resp.setResult(new TCatalogUpdateResult());
     resp.getResult().setCatalog_service_id(JniCatalog.getServiceId());
-
     if (req.isSetDb_name()) {
       Preconditions.checkState(!catalog_.isBlacklistedDb(req.getDb_name()),
           String.format("Can't refresh functions in blacklisted database: %s. %s",
@@ -7074,14 +7123,23 @@ public class CatalogOpExecutor {
         response.getResult().setStatus(
             new TStatus(TErrorCode.OK, new ArrayList<String>()));
       }
-
+      boolean syncToLatestEventId =
+          BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
       // Before commit fire insert events if external event processing is
       // enabled. This is best-effort. Any errors in it should not fail the INSERT.
       try {
         createInsertEvents((FeFsTable) table, update.getUpdated_partitions(),
             addedPartitionNames, update.is_overwrite, tblTxn);
       } catch (Exception e) {
-        LOG.error("Failed to fire insert events for table {}", table.getFullName(), e);
+        if (syncToLatestEventId) {
+          // Throw an exceptions since syncToLatestEventId is enabled and
+          // MetastoreEventsProcessor depends on generated insert events to update cache
+          throw new ImpalaRuntimeException(String.format(
+              "Failed to generate Insert events for the table '%s': %s",
+              table.getFullName(), e.getMessage()));
+        } else {
+          LOG.error("Failed to fire insert events for table {}", table.getFullName(), e);
+        }
       }
 
       // Commit transactional inserts on success. We don't abort the transaction
@@ -7093,6 +7151,7 @@ public class CatalogOpExecutor {
         }
       }
 
+      String debugAction = update.getDebug_action();
       if (table instanceof FeIcebergTable && update.isSetIceberg_operation()) {
         FeIcebergTable iceTbl = (FeIcebergTable)table;
         org.apache.iceberg.Transaction iceTxn = IcebergUtil.getIcebergTransaction(iceTbl);
@@ -7106,16 +7165,15 @@ public class CatalogOpExecutor {
               catalog_.getCatalogServiceId(), newCatalogVersion);
           catalog_.addVersionsForInflightEvents(false, table, newCatalogVersion);
         }
-
-        if (update.isSetDebug_action()) {
-          String debugAction = update.getDebug_action();
-          DebugUtils.executeDebugAction(debugAction, DebugUtils.ICEBERG_COMMIT);
-        }
+        DebugUtils.executeDebugAction(debugAction, DebugUtils.ICEBERG_COMMIT);
         iceTxn.commitTransaction();
       }
-
-      loadTableMetadata(table, newCatalogVersion, true, false, partsToLoadMetadata,
-          partitionToEventId, "INSERT", update.getDebug_action());
+      if (table instanceof FeIcebergTable || DebugUtils.hasDebugAction(debugAction,
+          DebugUtils.LOAD_FILE_METADATA_THROW_EXCEPTION) ||
+          !trySyncToLatestEventId(table)) {
+        loadTableMetadata(table, newCatalogVersion, true, false, partsToLoadMetadata,
+            partitionToEventId, "INSERT", update.getDebug_action());
+      }
       addTableToCatalogUpdate(table, update.header.want_minimal_response,
           response.result);
     } finally {
@@ -7128,11 +7186,8 @@ public class CatalogOpExecutor {
       response.getResult().setVersion(
           catalog_.waitForSyncDdlVersion(response.getResult()));
     }
-
-    if (update.isSetDebug_action()) {
-      DebugUtils.executeDebugAction(update.getDebug_action(),
-          DebugUtils.INSERT_FINISH_DELAY);
-    }
+    DebugUtils.executeDebugAction(update.getDebug_action(),
+        DebugUtils.INSERT_FINISH_DELAY);
     return response;
   }
 
@@ -7262,15 +7317,20 @@ public class CatalogOpExecutor {
   private void trackInsertEvents(HdfsTable table, List<Long> eventIds,
       LinkedHashSet<String> existingPartsInHms) {
     if (eventIds == null || eventIds.isEmpty()) return;
+    boolean syncToLatestEventId =
+        BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
     if (table.getNumClusteringCols() == 0) { // insert into table
       Preconditions.checkState(eventIds.size() == 1);
-      catalog_.addVersionsForInflightEvents(true, table, eventIds.get(0));
+      if (!syncToLatestEventId) {
+        catalog_.addVersionsForInflightEvents(true, table, eventIds.get(0));
+      }
     } else { // insert into partition
       Preconditions.checkState(existingPartsInHms.size() == eventIds.size());
       int par_idx = 0;
       for (String partName : existingPartsInHms) {
         long eventId = eventIds.get(par_idx++);
-        if (!table.addInflightInsertEventToPartition(partName, eventId)) {
+        if (!syncToLatestEventId && !table.addInflightInsertEventToPartition(partName,
+            eventId)) {
           LOG.warn("INSERT event {} on partition {} of table {} are not tracked since " +
               "it doesn't exist in catalogd cache", eventId, partName,
               table.getFullName());
@@ -7430,11 +7490,22 @@ public class CatalogOpExecutor {
       } catch (ImpalaRuntimeException e) {
         throw e;
       }
-      Db updatedDb = catalog_.updateDb(msDb);
+      Db updatedDb = null;
+      boolean syncToLatestEventId =
+          BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+      if (syncToLatestEventId) {
+        updatedDb = db;
+        MetastoreEventsProcessor.syncToLatestEventId(catalog_, updatedDb,
+            catalog_.getEventFactoryForSyncToLatestEvent(), new Metrics());
+      } else {
+        updatedDb = catalog_.updateDb(msDb);
+        // now that HMS alter operation has succeeded, add this version to list of
+        // inflight events in catalog database if event processing is enabled
+        catalog_.addVersionsForInflightEvents(db, newCatalogVersion);
+      }
       addDbToCatalogUpdate(updatedDb, wantMinimalResult, response.result);
-      // now that HMS alter operation has succeeded, add this version to list of inflight
-      // events in catalog database if event processing is enabled
-      catalog_.addVersionsForInflightEvents(db, newCatalogVersion);
+    } catch (MetastoreNotificationException e) {
+      throw new CatalogException("Unable to alter comment on database ", e);
     } finally {
       db.getLock().unlock();
     }
@@ -7486,11 +7557,20 @@ public class CatalogOpExecutor {
             originalOwnerName, originalOwnerType, msDb.getOwnerName(),
             msDb.getOwnerType(), response);
       }
-      Db updatedDb = catalog_.updateDb(msDb);
+      Db updatedDb = null;
+      boolean syncToLatestEventId =
+          BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+      if (syncToLatestEventId) {
+        updatedDb = db;
+        MetastoreEventsProcessor.syncToLatestEventId(catalog_, updatedDb,
+            catalog_.getEventFactoryForSyncToLatestEvent(), new Metrics());
+      } else {
+        updatedDb = catalog_.updateDb(msDb);
+        // now that HMS alter operation has succeeded, add this version to list of
+        // inflight events in catalog database if event processing is enabled
+        catalog_.addVersionsForInflightEvents(db, newCatalogVersion);
+      }
       addDbToCatalogUpdate(updatedDb, wantMinimalResult, response.result);
-      // now that HMS alter operation has succeeded, add this version to list of inflight
-      // events in catalog database if event processing is enabled
-      catalog_.addVersionsForInflightEvents(db, newCatalogVersion);
     } finally {
       db.getLock().unlock();
     }
@@ -7541,10 +7621,14 @@ public class CatalogOpExecutor {
         msTbl.getParameters().put("comment", comment);
       }
       applyAlterTable(msTbl);
-      loadTableMetadata(tbl, newCatalogVersion, false, false, null, "ALTER COMMENT");
-      catalog_.addVersionsForInflightEvents(false, tbl, newCatalogVersion);
+      if (!trySyncToLatestEventId(tbl)) {
+        loadTableMetadata(tbl, newCatalogVersion, false, false, null, "ALTER COMMENT");
+        catalog_.addVersionsForInflightEvents(false, tbl, newCatalogVersion);
+      }
       addTableToCatalogUpdate(tbl, wantMinimalResult, response.result);
       addSummary(response, String.format("Updated %s.", (isView) ? "view" : "table"));
+    } catch (MetastoreNotificationException e) {
+      throw new CatalogException("Unable to alter comment on table/view ", e);
     } finally {
       tbl.releaseWriteLock();
     }
@@ -7578,11 +7662,15 @@ public class CatalogOpExecutor {
         }
         applyAlterTable(msTbl);
       }
-      loadTableMetadata(tbl, newCatalogVersion, false, true, null,
-          "ALTER COLUMN COMMENT");
-      catalog_.addVersionsForInflightEvents(false, tbl, newCatalogVersion);
+      if (!trySyncToLatestEventId(tbl) || (tbl instanceof KuduTable)) {
+        loadTableMetadata(tbl, newCatalogVersion, false, true, null,
+            "ALTER COLUMN COMMENT");
+        catalog_.addVersionsForInflightEvents(false, tbl, newCatalogVersion);
+      }
       addTableToCatalogUpdate(tbl, wantMinimalResult, response.result);
       addSummary(response, "Column has been altered.");
+    } catch (MetastoreNotificationException e) {
+      throw new CatalogException("Unable to alter comment on column ", e);
     } finally {
       tbl.releaseWriteLock();
     }
@@ -7684,4 +7772,17 @@ public class CatalogOpExecutor {
     }
   }
 
+  /**
+   * syncs the table in the cache to the latest event id of the HMS
+   */
+  private boolean trySyncToLatestEventId(Table tbl)
+      throws CatalogException, MetastoreNotificationException {
+    boolean syncToLatestEventId =
+        BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+    if (syncToLatestEventId) {
+      MetastoreEventsProcessor.syncToLatestEventId(catalog_, tbl,
+          catalog_.getEventFactoryForSyncToLatestEvent(), new Metrics());
+    }
+    return syncToLatestEventId;
+  }
 }

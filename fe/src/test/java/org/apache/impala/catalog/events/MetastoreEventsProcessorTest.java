@@ -1487,6 +1487,103 @@ public class MetastoreEventsProcessorTest {
   }
 
   /**
+   * Test to verify sync db/table in catalogD to latest HMS event id for any DDL in impala
+   * For this particular test, we would have to explicitly delay the event processor,
+   * so that enabling sync to latest event id from impala shell will have evidence that
+   * the catalogD's cache would be updated in the order that appeared in the HMS.
+   */
+  @Test
+  public void testSyncMetadataInImpala() throws ImpalaException, TException {
+    boolean prevFlagVal = BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
+    try {
+      BackendConfig.INSTANCE.setEnableSyncToLatestEventOnDdls(true);
+      assertEquals(EventProcessorStatus.ACTIVE, eventsProcessor_.getStatus());
+      createDatabaseFromImpala(TEST_DB_NAME, "created from Impala");
+      final String testTblName = "testSyncMetadataInImpala";
+      createTableFromImpala(TEST_DB_NAME, testTblName, true);
+
+      // verify alter table
+      alterTableAddCol(testTblName, "newCol", "string", "test new column");
+      alterTableSetTblPropertiesFromImpala(testTblName);
+      Table tbl = loadTable(testTblName);
+      assertTrue("Both hive schema change and impala table property should be present.",
+          tbl.getMetaStoreTable().getSd().getCols().size() == 3 &&
+              tbl.getMetaStoreTable().getParameters().containsKey("dummyKey1"));
+      long lastSyncedEventId = tbl.getLastSyncedEventId();
+      processEventsAndAssertAllSkipped();
+      assertEquals("Table not synced to latest event id of event processor",
+          lastSyncedEventId, eventsProcessor_.getCurrentEventId());
+      assertEquals(EventProcessorStatus.ACTIVE, eventsProcessor_.getStatus());
+
+      // verify alter database set owner
+      Database alteredDb = catalog_.getDb(TEST_DB_NAME).getMetaStoreDb().deepCopy();
+      alteredDb.setOwnerName("hiveOwner");
+      alterDatabase(alteredDb);
+      alterDbSetOwnerFromImpala(TEST_DB_NAME, "impalaSync", TOwnerType.USER);
+      Db updatedDb = catalog_.getDb(TEST_DB_NAME);
+      assertTrue("The new owner on DB should have been 'impalaSync'",
+          updatedDb.getOwnerUser().equals("impalaSync"));
+      lastSyncedEventId = updatedDb.getLastSyncedEventId();
+      processEventsAndAssertAllSkipped();
+      assertEquals("Table not synced to latest event_id",
+          lastSyncedEventId, eventsProcessor_.getCurrentEventId());
+      assertEquals(EventProcessorStatus.ACTIVE, eventsProcessor_.getStatus());
+
+      // verify insert event and add partition
+      alterTableAddParameter(testTblName, "hiveKey", "hiveValue");
+      TPartitionDef partitionDef = new TPartitionDef();
+      partitionDef.addToPartition_spec(new TPartitionKeyValue("p1", "2022"));
+      partitionDef.addToPartition_spec(new TPartitionKeyValue("p2", "2023"));
+      alterTableAddPartition(TEST_DB_NAME, testTblName, partitionDef);
+      insertFromImpala(testTblName, true, "p1=2022", "p2=2023",
+          false, new ArrayList<>());
+      tbl = loadTable(testTblName);
+      assertTrue("Hive table property should be present after insert operation in impala",
+          tbl.getMetaStoreTable().getParameters().containsKey("hiveKey"));
+      lastSyncedEventId = tbl.getLastSyncedEventId();
+      processEventsAndAssertAllSkipped();
+      assertEquals("Table not synced to latest event id of event processor",
+          lastSyncedEventId, eventsProcessor_.getCurrentEventId());
+      assertEquals(EventProcessorStatus.ACTIVE, eventsProcessor_.getStatus());
+
+      // verify rename table event
+      String newTblName = "testRenamedSyncMetadataInImpala";
+      alterTableRename(testTblName, newTblName, TEST_DB_NAME);
+      eventsProcessor_.processEvents();
+      alterTableRenameFromImpala(TEST_DB_NAME, newTblName, testTblName);
+      tbl = loadTable(testTblName);
+      assertEquals("Table not synced to latest event id of event processor",
+          tbl.getLastSyncedEventId(), eventsProcessor_.getCurrentEventId());
+      assertEquals(EventProcessorStatus.ACTIVE, eventsProcessor_.getStatus());
+
+      // 2 renames in HMS, not seen the updates in cache and rename from Impala
+      alterTableRename(testTblName, newTblName, TEST_DB_NAME);
+      alterTableRename(newTblName, testTblName, TEST_DB_NAME);
+      alterTableRenameFromImpala(TEST_DB_NAME, testTblName, newTblName);
+      tbl = loadTable(newTblName);
+      assertEquals("Table not synced to latest event id of event processor",
+          tbl.getLastSyncedEventId(), eventsProcessor_.getCurrentEventId());
+      processEventsAndAssertAllSkipped();
+      assertEquals(EventProcessorStatus.ACTIVE, eventsProcessor_.getStatus());
+      // Done with the test, changing back to original name
+      alterTableRenameFromImpala(TEST_DB_NAME, newTblName, testTblName);
+      tbl = loadTable(testTblName);
+
+      // verify alter column event
+      altertableChangeCol(testTblName, "newCol", "int", "change column from hive");
+      alterTableRemoveColFromImpala(TEST_DB_NAME, testTblName, "newCol");
+      tbl = loadTable(testTblName);
+      lastSyncedEventId = tbl.getLastSyncedEventId();
+      processEventsAndAssertAllSkipped();
+      assertEquals("Table not synced to latest event id of event processor",
+          lastSyncedEventId, eventsProcessor_.getCurrentEventId());
+      assertEquals(EventProcessorStatus.ACTIVE, eventsProcessor_.getStatus());
+    } finally {
+      BackendConfig.INSTANCE.setEnableSyncToLatestEventOnDdls(prevFlagVal);
+    }
+  }
+
+  /**
    * Test creates, drops and creates a table with the same name from Impala. This would
    * lead to an interesting sequence of CREATE_TABLE, DROP_TABLE, CREATE_TABLE events
    * while the catalogD state has the latest version of the table cached. Test makes sure
@@ -3428,10 +3525,8 @@ public class MetastoreEventsProcessorTest {
   @Test
   public void testSkippingOlderEvents() throws Exception {
     boolean prevFlagVal = BackendConfig.INSTANCE.enableSyncToLatestEventOnDdls();
-    boolean invalidateHMSFlag = BackendConfig.INSTANCE.invalidateCatalogdHMSCacheOnDDLs();
     try {
       BackendConfig.INSTANCE.setEnableSyncToLatestEventOnDdls(true);
-      BackendConfig.INSTANCE.setInvalidateCatalogdHMSCacheOnDDLs(false);
       BackendConfig.INSTANCE.setSkippingOlderEvents(true);
       createDatabase(TEST_DB_NAME, null);
       final String testTblName = "testSkippingOlderEvents";
@@ -3468,7 +3563,6 @@ public class MetastoreEventsProcessorTest {
       confirmTableIsLoaded(TEST_DB_NAME, testTblName);
     } finally {
       BackendConfig.INSTANCE.setEnableSyncToLatestEventOnDdls(prevFlagVal);
-      BackendConfig.INSTANCE.setInvalidateCatalogdHMSCacheOnDDLs(invalidateHMSFlag);
     }
   }
 
@@ -3670,9 +3764,9 @@ public class MetastoreEventsProcessorTest {
   }
 
   /**
-   * Drops table from Impala
+   * creates a DDLExecRequest object for drop table query from Impala
    */
-  private void dropTableFromImpala(String dbName, String tblName) throws ImpalaException {
+  public TDdlExecRequest getDropTableFromImpalaReq(String dbName, String tblName) {
     TDdlExecRequest req = new TDdlExecRequest();
     req.setQuery_options(new TDdlQueryOptions());
     req.setDdl_type(TDdlType.DROP_TABLE);
@@ -3680,6 +3774,14 @@ public class MetastoreEventsProcessorTest {
     dropTableParams.setTable_name(new TTableName(dbName, tblName));
     dropTableParams.setIf_exists(true);
     req.setDrop_table_or_view_params(dropTableParams);
+    return req;
+  }
+
+  /**
+   * Drops table from Impala
+   */
+  private void dropTableFromImpala(String dbName, String tblName) throws ImpalaException {
+    TDdlExecRequest req = getDropTableFromImpalaReq(dbName, tblName);
     catalogOpExecutor_.execDdlRequest(req);
   }
 
@@ -3708,6 +3810,15 @@ public class MetastoreEventsProcessorTest {
    */
   private void alterDbSetOwnerFromImpala(
       String dbName, String owner, TOwnerType ownerType) throws ImpalaException {
+    TDdlExecRequest req = getAlterDbSetOwnerFromImpalaReq(dbName, owner, ownerType);
+    catalogOpExecutor_.execDdlRequest(req);
+  }
+
+  /**
+   * creates a DDLExecRequest object for alter database set owner query from Impala
+   */
+  public TDdlExecRequest getAlterDbSetOwnerFromImpalaReq(String dbName, String owner,
+      TOwnerType ownerType) {
     TDdlExecRequest req = new TDdlExecRequest();
     req.setQuery_options(new TDdlQueryOptions());
     req.setDdl_type(TDdlType.ALTER_DATABASE);
@@ -3719,7 +3830,7 @@ public class MetastoreEventsProcessorTest {
     alterDbSetOwnerParams.setOwner_type(ownerType);
     alterDbParams.setSet_owner_params(alterDbSetOwnerParams);
     req.setAlter_db_params(alterDbParams);
-    catalogOpExecutor_.execDdlRequest(req);
+    return req;
   }
 
   /**
@@ -3756,12 +3867,10 @@ public class MetastoreEventsProcessorTest {
   }
 
   /**
-   * Creates a table using CatalogOpExecutor to simulate a DDL operation from Impala
-   * client
+   * creates a DDLExecRequest object for create table query from Impala
    */
-  public static void createTableFromImpala(CatalogOpExecutor opExecutor, String dbName,
-      String tblName, Map<String, String> tblParams, boolean isPartitioned)
-      throws ImpalaException {
+  public static TDdlExecRequest getCreateTableFromImpalaReq(String dbName,
+      String tblName, Map<String, String> tblParams, boolean isPartitioned) {
     TDdlExecRequest req = new TDdlExecRequest();
     req.setQuery_options(new TDdlQueryOptions());
     req.setDdl_type(TDdlType.CREATE_TABLE);
@@ -3785,6 +3894,18 @@ public class MetastoreEventsProcessorTest {
       createTableParams.setPartition_columns(partitionColumns);
     }
     req.setCreate_table_params(createTableParams);
+    return req;
+  }
+
+  /**
+   * Creates a table using CatalogOpExecutor to simulate a DDL operation from Impala
+   * client
+   */
+  public static void createTableFromImpala(CatalogOpExecutor opExecutor, String dbName,
+      String tblName, Map<String, String> tblParams, boolean isPartitioned)
+      throws ImpalaException {
+    TDdlExecRequest req = getCreateTableFromImpalaReq(dbName, tblName,
+        tblParams, isPartitioned);
     opExecutor.execDdlRequest(req);
   }
 
@@ -3819,23 +3940,6 @@ public class MetastoreEventsProcessorTest {
     dropFunctionParams.setArg_types(fn.toThrift().getArg_types());
     dropFunctionParams.setSignature(fn.toThrift().getSignature());
     req.setDrop_fn_params(dropFunctionParams);
-    catalogOpExecutor_.execDdlRequest(req);
-  }
-  /**
-   * Renames a table from oldTblName to newTblName from Impala
-   */
-  private void renameTableFromImpala(String oldTblName, String newTblName)
-      throws ImpalaException {
-    TDdlExecRequest req = new TDdlExecRequest();
-    req.setQuery_options(new TDdlQueryOptions());
-    req.setDdl_type(TDdlType.ALTER_TABLE);
-    TAlterTableOrViewRenameParams renameParams = new TAlterTableOrViewRenameParams();
-    renameParams.new_table_name = new TTableName(TEST_DB_NAME, newTblName);
-    TAlterTableParams alterTableParams = new TAlterTableParams();
-    alterTableParams.setAlter_type(TAlterTableType.RENAME_TABLE);
-    alterTableParams.setTable_name(new TTableName(TEST_DB_NAME, oldTblName));
-    alterTableParams.setRename_params(renameParams);
-    req.setAlter_table_params(alterTableParams);
     catalogOpExecutor_.execDdlRequest(req);
   }
 
@@ -3897,11 +4001,10 @@ public class MetastoreEventsProcessorTest {
   }
 
   /**
-   * Adds dummy partition from Impala. Assumes that given table is a partitioned table
-   * and the has a partition key of type string and value of type string
+   * creates a DDLExecRequest object for alter table add partition query from Impala
    */
-  private void alterTableAddPartition(
-      String dbName, String tblName, TPartitionDef partitionDef) throws ImpalaException {
+  public TDdlExecRequest getAlterTableAddPartitionReq(String dbName, String tblName,
+      TPartitionDef partitionDef) {
     TDdlExecRequest req = new TDdlExecRequest();
     req.setQuery_options(new TDdlQueryOptions());
     req.setDdl_type(TDdlType.ALTER_TABLE);
@@ -3913,14 +4016,24 @@ public class MetastoreEventsProcessorTest {
     addPartitionParams.addToPartitions(partitionDef);
     alterTableParams.setAdd_partition_params(addPartitionParams);
     req.setAlter_table_params(alterTableParams);
+    return req;
+  }
+
+  /**
+   * Adds dummy partition from Impala. Assumes that given table is a partitioned table
+   * and the has a partition key of type string and value of type string
+   */
+  private void alterTableAddPartition(
+      String dbName, String tblName, TPartitionDef partitionDef) throws ImpalaException {
+    TDdlExecRequest req = getAlterTableAddPartitionReq(dbName, tblName, partitionDef);
     catalogOpExecutor_.execDdlRequest(req);
   }
 
   /**
-   * Drops the partition for the given table
+   * creates a DDLExecRequest object for alter table drop partition query from Impala
    */
-  private void alterTableDropPartition(String dbName, String tblName,
-      List<TPartitionKeyValue> keyValue) throws ImpalaException {
+  public TDdlExecRequest getAlterTableDropPartitionReq(String dbName, String tblName,
+      List<TPartitionKeyValue> keyValue) {
     TDdlExecRequest req = new TDdlExecRequest();
     req.setQuery_options(new TDdlQueryOptions());
     req.setDdl_type(TDdlType.ALTER_TABLE);
@@ -3932,6 +4045,15 @@ public class MetastoreEventsProcessorTest {
     dropPartitionParams.addToPartition_set(keyValue);
     alterTableParams.setDrop_partition_params(dropPartitionParams);
     req.setAlter_table_params(alterTableParams);
+    return req;
+  }
+
+  /**
+   * Drops the partition for the given table
+   */
+  private void alterTableDropPartition(String dbName, String tblName,
+      List<TPartitionKeyValue> keyValue) throws ImpalaException {
+    TDdlExecRequest req = getAlterTableDropPartitionReq(dbName, tblName, keyValue);
     catalogOpExecutor_.execDdlRequest(req);
   }
 
@@ -3995,10 +4117,11 @@ public class MetastoreEventsProcessorTest {
   }
 
   /**
-   * Sets the given location for a the give table using impala
+   * creates a DDLExecRequest object for alter table set location query from Impala
    */
-  private void alterTableSetLocationFromImpala(
-      String dbName, String tblName, String location) throws ImpalaException {
+  public TDdlExecRequest getAlterTableSetLocationFromImpalaReq(
+      String dbName, String tblName, String location,
+      List<TPartitionKeyValue> partitionSpec) {
     TDdlExecRequest req = new TDdlExecRequest();
     req.setQuery_options(new TDdlQueryOptions());
     req.setDdl_type(TDdlType.ALTER_TABLE);
@@ -4007,9 +4130,38 @@ public class MetastoreEventsProcessorTest {
     alterTableParams.setAlter_type(TAlterTableType.SET_LOCATION);
     TAlterTableSetLocationParams setLocationParams = new TAlterTableSetLocationParams();
     setLocationParams.setLocation(location);
+    setLocationParams.setPartition_spec(partitionSpec);
     alterTableParams.setSet_location_params(setLocationParams);
     req.setAlter_table_params(alterTableParams);
+    return req;
+  }
+
+  /**
+   * Sets the given location for a the give table using impala
+   */
+  private void alterTableSetLocationFromImpala(
+      String dbName, String tblName, String location) throws ImpalaException {
+    TDdlExecRequest req = getAlterTableSetLocationFromImpalaReq(dbName, tblName,
+        location, null);
     catalogOpExecutor_.execDdlRequest(req);
+  }
+
+  /**
+   * creates a DDLExecRequest object for rename table query from Impala
+   */
+  public TDdlExecRequest getRenameTableFromImpalaReq(String dbName, String oldTblName,
+      String newTable) {
+    TDdlExecRequest req = new TDdlExecRequest();
+    req.setQuery_options(new TDdlQueryOptions());
+    req.setDdl_type(TDdlType.ALTER_TABLE);
+    TAlterTableParams alterTableParams = new TAlterTableParams();
+    alterTableParams.setTable_name(new TTableName(dbName, oldTblName));
+    alterTableParams.setAlter_type(TAlterTableType.RENAME_TABLE);
+    TAlterTableOrViewRenameParams renameParams = new TAlterTableOrViewRenameParams();
+    renameParams.setNew_table_name(new TTableName(dbName, newTable));
+    alterTableParams.setRename_params(renameParams);
+    req.setAlter_table_params(alterTableParams);
+    return req;
   }
 
   /**
@@ -4017,29 +4169,21 @@ public class MetastoreEventsProcessorTest {
    */
   private void alterTableRenameFromImpala(String dbName, String tblName, String newTable)
       throws ImpalaException {
+    TDdlExecRequest req = getRenameTableFromImpalaReq(TEST_DB_NAME, tblName,
+        newTable);
+    catalogOpExecutor_.execDdlRequest(req);
+  }
+
+  /**
+   * creates a DDLExecRequest object for alter table set table properties query from
+   * Impala
+   */
+  public TDdlExecRequest getTblPropertiesFromImpalaReq(String dbName, String tblName) {
     TDdlExecRequest req = new TDdlExecRequest();
     req.setQuery_options(new TDdlQueryOptions());
     req.setDdl_type(TDdlType.ALTER_TABLE);
     TAlterTableParams alterTableParams = new TAlterTableParams();
     alterTableParams.setTable_name(new TTableName(dbName, tblName));
-    alterTableParams.setAlter_type(TAlterTableType.RENAME_TABLE);
-    TAlterTableOrViewRenameParams renameParams = new TAlterTableOrViewRenameParams();
-    renameParams.setNew_table_name(new TTableName(dbName, newTable));
-    alterTableParams.setRename_params(renameParams);
-    req.setAlter_table_params(alterTableParams);
-    catalogOpExecutor_.execDdlRequest(req);
-  }
-
-  /**
-   * Set table properties from impala
-   */
-  private void alterTableSetTblPropertiesFromImpala(String tblName)
-      throws ImpalaException {
-    TDdlExecRequest req = new TDdlExecRequest();
-    req.setQuery_options(new TDdlQueryOptions());
-    req.setDdl_type(TDdlType.ALTER_TABLE);
-    TAlterTableParams alterTableParams = new TAlterTableParams();
-    alterTableParams.setTable_name(new TTableName(TEST_DB_NAME, tblName));
     TAlterTableSetTblPropertiesParams setTblPropertiesParams =
         new TAlterTableSetTblPropertiesParams();
     setTblPropertiesParams.setTarget(TTablePropertyType.TBL_PROPERTY);
@@ -4050,6 +4194,15 @@ public class MetastoreEventsProcessorTest {
     alterTableParams.setSet_tbl_properties_params(setTblPropertiesParams);
     alterTableParams.setAlter_type(TAlterTableType.SET_TBL_PROPERTIES);
     req.setAlter_table_params(alterTableParams);
+    return req;
+  }
+
+  /**
+   * Set table properties from impala
+   */
+  private void alterTableSetTblPropertiesFromImpala(String tblName)
+      throws ImpalaException {
+    TDdlExecRequest req = getTblPropertiesFromImpalaReq(TEST_DB_NAME, tblName);
     catalogOpExecutor_.execDdlRequest(req);
     Table catalogTbl = catalog_.getTable(TEST_DB_NAME, tblName);
     assertNotNull(catalogTbl.getMetaStoreTable().getParameters());
@@ -4419,5 +4572,19 @@ public class MetastoreEventsProcessorTest {
 
   private Table loadTable(String tblName) throws CatalogException {
     return loadTable(TEST_DB_NAME, tblName);
+  }
+
+  private void processEventsAndAssertAllSkipped() {
+    long lastReceivedEvents = eventsProcessor_.getMetrics()
+        .getMeter(MetastoreEventsProcessor.EVENTS_RECEIVED_METRIC).getCount();
+    long lastSkippedEvents = eventsProcessor_.getMetrics()
+        .getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).getCount();
+    eventsProcessor_.processEvents();
+    long currReceivedEvents = eventsProcessor_.getMetrics()
+        .getMeter(MetastoreEventsProcessor.EVENTS_RECEIVED_METRIC).getCount();
+    long currSkippedEvents = eventsProcessor_.getMetrics()
+        .getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).getCount();
+    assertEquals("All events should be skipped", currSkippedEvents - lastSkippedEvents,
+        currReceivedEvents - lastReceivedEvents);
   }
 }

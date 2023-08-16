@@ -1397,7 +1397,12 @@ public class CatalogdMetaProvider implements MetaProvider {
 
       if (!isDelete && obj.type == TCatalogObjectType.HDFS_PARTITION) {
         // Skip if this is the update for a new partition.
-        if (!obj.hdfs_partition.isSetPrev_id()) continue;
+        if (!obj.hdfs_partition.isSetPrev_id()) {
+          LOG.debug("Previous id for the partition object is not set. Partition info: " +
+              obj.hdfs_partition);
+          continue;
+        }
+
         // This is an update from an existing partiton. Invalidate the previous partition
         // instance by resetting the id to the previous one.
         obj.hdfs_partition.setId(obj.hdfs_partition.prev_id);

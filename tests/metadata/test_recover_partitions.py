@@ -258,13 +258,12 @@ class TestRecoverPartitions(ImpalaTestSuite):
         "duplicate partition key values." % FQ_TBL_NAME
 
   @SkipIfLocal.hdfs_client
-  @SkipIfCatalogV2.impala_8489()
   def test_post_invalidate(self, vector, unique_database):
     """Test that RECOVER PARTITIONS works correctly after invalidate."""
     TBL_NAME = "test_recover_partitions"
     FQ_TBL_NAME = unique_database + "." + TBL_NAME
     TBL_LOCATION = self.__get_fs_location(unique_database, TBL_NAME)
-    LEAF_DIR = "i=002/p=p2/"
+    LEAF_DIR = "i=2/p=p2/"  # if the path is i=002/p=p2, fire insert events to HMS fails
     FILE_PATH = "test"
     INSERTED_VALUE = "2"
 

@@ -143,6 +143,11 @@ public class BackendConfig {
     return backendCfg_.hms_event_polling_interval_s;
   }
 
+  @VisibleForTesting
+  public void setHMSPollingIntervalInSeconds(int seconds) {
+    backendCfg_.hms_event_polling_interval_s = seconds;
+  }
+
   public boolean isInsertEventsEnabled() { return backendCfg_.enable_insert_events; }
 
   /**
