@@ -17,15 +17,27 @@
 
 package org.apache.impala.catalog.monitor;
 
+import com.google.common.base.MoreObjects;
+import org.apache.impala.service.BackendConfig;
+import org.apache.impala.thrift.TCatalogServiceRequestHeader;
+import org.apache.impala.thrift.TDdlExecRequest;
 import org.apache.impala.thrift.TDdlType;
+import org.apache.impala.thrift.TCatalogOpRecord;
+import org.apache.impala.thrift.TGetOperationUsageResponse;
 import org.apache.impala.thrift.TOperationUsageCounter;
 import org.apache.impala.thrift.TResetMetadataRequest;
 import org.apache.impala.thrift.TTableName;
+import org.apache.impala.thrift.TUniqueId;
 import org.apache.impala.thrift.TUpdateCatalogRequest;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Adapter class for the catalog operation counters. Currently, it tracks,
@@ -35,6 +47,7 @@ import java.util.Optional;
  */
 public final class CatalogOperationMetrics {
   public final static CatalogOperationMetrics INSTANCE = new CatalogOperationMetrics();
+  private final static int OPERATION_LOG_SIZE = 100;
 
   // Keeps track of the on-going DDL operations
   CatalogDdlCounter catalogDdlCounter;
@@ -45,45 +58,142 @@ public final class CatalogOperationMetrics {
   // Keeps track of the on-going finalize DML requests (insert/CTAS/upgrade)
   CatalogFinalizeDmlCounter catalogFinalizeDmlCounter;
 
+  private Map<TUniqueId, TCatalogOpRecord> inFlightOperations = new ConcurrentHashMap<>();
+  private Queue<TCatalogOpRecord> finishedOperations = new ConcurrentLinkedQueue<>();
+  private final int catalogOperationLogSize;
+
   private CatalogOperationMetrics() {
     catalogDdlCounter = new CatalogDdlCounter();
     catalogResetMetadataCounter = new CatalogResetMetadataCounter();
     catalogFinalizeDmlCounter = new CatalogFinalizeDmlCounter();
+    catalogOperationLogSize = BackendConfig.INSTANCE.catalogOperationLogSize();
   }
 
-  public void increment(TDdlType tDdlType, Optional<TTableName> tTableName) {
-    catalogDdlCounter.incrementOperation(tDdlType, tTableName);
+  private void addRecord(TCatalogServiceRequestHeader header,
+      String catalogOpName, Optional<TTableName> tTableName, String details) {
+    String user = "unknown";
+    String clientIp = "unknown";
+    String coordinator = "unknown";
+    TUniqueId queryId = null;
+    queryId = header.getQuery_id();
+    if (header.isSetRequesting_user()) {
+      user = header.getRequesting_user();
+    }
+    if (header.isSetClient_ip()) {
+      clientIp = header.getClient_ip();
+    }
+    if (header.isSetCoordinator_hostname()) {
+      coordinator = header.getCoordinator_hostname();
+    }
+    if (queryId != null) {
+      TCatalogOpRecord record = new TCatalogOpRecord(Thread.currentThread().getId(),
+          queryId, clientIp, coordinator, catalogOpName,
+          catalogDdlCounter.getTableName(tTableName), user,
+          System.currentTimeMillis(), -1, "STARTED", details);
+      inFlightOperations.put(queryId, record);
+    }
   }
 
-  public void decrement(TDdlType tDdlType, Optional<TTableName> tTableName) {
+  private void archiveRecord(TUniqueId queryId, String errorMsg) {
+    if (queryId != null && inFlightOperations.containsKey(queryId)) {
+      TCatalogOpRecord record = inFlightOperations.remove(queryId);
+      record.setFinish_time_ms(System.currentTimeMillis());
+      if (errorMsg != null) {
+        record.setStatus("FAILED");
+        record.setDetails(record.getDetails() + ", error=" + errorMsg);
+      } else {
+        record.setStatus("FINISHED");
+      }
+      if (finishedOperations.size() >= catalogOperationLogSize) {
+        finishedOperations.poll();
+      }
+      finishedOperations.add(record);
+    }
+  }
+
+  public void increment(TDdlExecRequest ddlRequest, Optional<TTableName> tTableName) {
+    if (ddlRequest.isSetHeader()) {
+      String details = "query_options=" + ddlRequest.query_options.toString();
+      addRecord(ddlRequest.getHeader(), ddlRequest.ddl_type.name(), tTableName, details);
+    }
+    catalogDdlCounter.incrementOperation(ddlRequest.ddl_type, tTableName);
+  }
+
+  public void decrement(TDdlType tDdlType, TUniqueId queryId,
+      Optional<TTableName> tTableName, String errorMsg) {
+    archiveRecord(queryId, errorMsg);
     catalogDdlCounter.decrementOperation(tDdlType, tTableName);
   }
 
   public void increment(TResetMetadataRequest req) {
+    Optional<TTableName> tTableName =
+        req.table_name != null ? Optional.of(req.table_name) : Optional.empty();
+    if (req.isSetHeader()) {
+      String details = "sync_ddl=" + req.sync_ddl +
+          ", want_minimal_response=" + req.getHeader().want_minimal_response +
+          ", refresh_updated_hms_partitions=" + req.refresh_updated_hms_partitions;
+      if (req.isSetDebug_action() && !req.debug_action.isEmpty()) {
+        details += ", debug_action=" + req.debug_action;
+      }
+      addRecord(req.getHeader(),
+          CatalogResetMetadataCounter.getResetMetadataType(req, tTableName).name(),
+          tTableName, details);
+    }
     catalogResetMetadataCounter.incrementOperation(req);
   }
 
-  public void decrement(TResetMetadataRequest req) {
+  public void decrement(TResetMetadataRequest req, String errorMsg) {
+    if (req.isSetHeader()) {
+      archiveRecord(req.getHeader().getQuery_id(), errorMsg);
+    }
     catalogResetMetadataCounter.decrementOperation(req);
   }
 
-  public void increment(TUpdateCatalogRequest request) {
-    catalogFinalizeDmlCounter.incrementOperation(request);
+  public void increment(TUpdateCatalogRequest req) {
+    Optional<TTableName> tTableName =
+        Optional.of(new TTableName(req.db_name, req.target_table));
+    if (req.isSetHeader()) {
+      String details = "sync_ddl=" + req.sync_ddl +
+          ", is_overwrite=" + req.is_overwrite +
+          ", transaction_id=" + req.transaction_id +
+          ", write_id=" + req.write_id +
+          ", num_of_updated_partitions=" + req.getUpdated_partitionsSize();
+      if (req.isSetIceberg_operation()) {
+        details += ", iceberg_operation=" + req.iceberg_operation.operation;
+      }
+      if (req.isSetDebug_action() && !req.debug_action.isEmpty()) {
+        details += ", debug_action=" + req.debug_action;
+      }
+      addRecord(req.getHeader(),
+          CatalogFinalizeDmlCounter.getDmlType(req.getHeader().redacted_sql_stmt).name(),
+          tTableName, details);
+    }
+    catalogFinalizeDmlCounter.incrementOperation(req);
   }
 
-  public void decrement(TUpdateCatalogRequest request) {
-    catalogFinalizeDmlCounter.decrementOperation(request);
+  public void decrement(TUpdateCatalogRequest req, String errorMsg) {
+    if (req.isSetHeader()) {
+      archiveRecord(req.getHeader().getQuery_id(), errorMsg);
+    }
+    catalogFinalizeDmlCounter.decrementOperation(req);
   }
 
   /**
    * Merges the CatalogOpMetricCounter operation summary metrics into a single
    * list that can be passed to the backend webserver.
    */
-  public List<TOperationUsageCounter> getOperationMetrics() {
+  public TGetOperationUsageResponse getOperationMetrics() {
     List<TOperationUsageCounter> merged = new ArrayList<>();
     merged.addAll(catalogDdlCounter.getOperationUsage());
     merged.addAll(catalogResetMetadataCounter.getOperationUsage());
     merged.addAll(catalogFinalizeDmlCounter.getOperationUsage());
-    return merged;
+    TGetOperationUsageResponse res = new TGetOperationUsageResponse(merged);
+    for (TCatalogOpRecord record : inFlightOperations.values()) {
+      res.addToIn_flight_catalog_operations(record);
+    }
+    List<TCatalogOpRecord> records = new ArrayList<>(finishedOperations);
+    Collections.reverse(records);
+    res.setFinished_catalog_operations(records);
+    return res;
   }
 }

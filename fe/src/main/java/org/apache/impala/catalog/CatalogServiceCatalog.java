@@ -3411,8 +3411,7 @@ public class CatalogServiceCatalog extends Catalog {
    * Retrieves information about the current catalog on-going operations.
    */
   public TGetOperationUsageResponse getOperationUsage() {
-    return new TGetOperationUsageResponse(
-        CatalogMonitor.INSTANCE.getCatalogOperationMetrics().getOperationMetrics());
+    return CatalogMonitor.INSTANCE.getCatalogOperationMetrics().getOperationMetrics();
   }
 
   /**

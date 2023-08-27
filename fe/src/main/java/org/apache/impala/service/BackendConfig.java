@@ -419,4 +419,12 @@ public class BackendConfig {
   public int icebergReloadNewFilesThreshold() {
     return backendCfg_.iceberg_reload_new_files_threshold;
   }
+
+  public int catalogOperationLogSize() {
+    return backendCfg_.catalog_operation_log_size;
+  }
+
+  public String getHostname() {
+    return backendCfg_.hostname;
+  }
 }

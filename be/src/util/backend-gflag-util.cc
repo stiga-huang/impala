@@ -108,6 +108,8 @@ DECLARE_int32(thrift_rpc_max_message_size);
 DECLARE_string(file_metadata_reload_properties);
 DECLARE_string(java_weigher);
 DECLARE_int32(iceberg_reload_new_files_threshold);
+DECLARE_int32(catalog_operation_log_size);
+DECLARE_string(hostname);
 
 // HS2 SAML2.0 configuration
 // Defined here because TAG_FLAG caused issues in global-flags.cc
@@ -423,6 +425,8 @@ Status PopulateThriftBackendGflags(TBackendGflags& cfg) {
   cfg.__set_scan_range_cost_factor(FLAGS_scan_range_cost_factor);
   cfg.__set_use_jamm_weigher(FLAGS_java_weigher == "jamm");
   cfg.__set_iceberg_reload_new_files_threshold(FLAGS_iceberg_reload_new_files_threshold);
+  cfg.__set_catalog_operation_log_size(FLAGS_catalog_operation_log_size);
+  cfg.__set_hostname(FLAGS_hostname);
   return Status::OK();
 }
 

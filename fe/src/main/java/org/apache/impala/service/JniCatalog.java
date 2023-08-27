@@ -118,10 +118,6 @@ public class JniCatalog {
   private final static ReentrantReadWriteLock catalogServiceIdLock_ =
       new ReentrantReadWriteLock(true /*fair ordering*/);
 
-  // A singleton monitoring class that keeps track of the catalog usage metrics.
-  private final CatalogOperationMetrics catalogOperationUsage_ =
-      CatalogMonitor.INSTANCE.getCatalogOperationMetrics();
-
   private static TUniqueId generateId() {
     UUID uuid = UUID.randomUUID();
     return new TUniqueId(uuid.getMostSignificantBits(), uuid.getLeastSignificantBits());
@@ -316,12 +312,10 @@ public class JniCatalog {
       throws ImpalaException, TException {
     TResetMetadataRequest req = new TResetMetadataRequest();
     JniUtil.deserializeThrift(protocolFactory_, req, thriftResetMetadataReq);
-    catalogOperationUsage_.increment(req);
     String shortDesc = CatalogOpUtil.getShortDescForReset(req);
 
     return execAndSerialize("resetMetadata", shortDesc,
-        () -> catalogOpExecutor_.execResetMetadata(req),
-        () -> catalogOperationUsage_.decrement(req));
+        () -> catalogOpExecutor_.execResetMetadata(req));
   }
 
   /**
@@ -490,13 +484,11 @@ public class JniCatalog {
       throws ImpalaException, TException {
     TUpdateCatalogRequest request = new TUpdateCatalogRequest();
     JniUtil.deserializeThrift(protocolFactory_, request, thriftUpdateCatalog);
-    catalogOperationUsage_.increment(request);
     String shortDesc = "Update catalog for "
         + fullyQualifiedTableName(request.getDb_name(), request.getTarget_table());
 
     return execAndSerialize("updateCatalog", shortDesc,
-        () -> catalogOpExecutor_.updateCatalog(request),
-        () -> catalogOperationUsage_.decrement(request));
+        () -> catalogOpExecutor_.updateCatalog(request));
   }
 
   /**

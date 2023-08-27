@@ -2165,6 +2165,7 @@ TCatalogServiceRequestHeader ClientRequestState::GetCatalogServiceRequestHeader(
       query_ctx_.client_request.__isset.redacted_stmt ?
           query_ctx_.client_request.redacted_stmt : query_ctx_.client_request.stmt);
   header.__set_query_id(query_ctx_.query_id);
+  header.__set_coordinator_hostname(FLAGS_hostname);
   return header;
 }
 
