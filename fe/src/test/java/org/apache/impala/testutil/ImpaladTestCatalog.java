@@ -34,6 +34,7 @@ import org.apache.impala.catalog.Table;
 import org.apache.impala.catalog.User;
 import org.apache.impala.thrift.TPrivilege;
 import org.apache.impala.thrift.TUniqueId;
+import org.apache.impala.util.EventSequence;
 import org.apache.impala.util.PatternMatcher;
 
 import java.util.HashSet;
@@ -110,7 +111,9 @@ public class ImpaladTestCatalog extends ImpaladCatalog {
   /**
    * Reloads all metadata from the source catalog.
    */
-  public void reset() throws CatalogException { srcCatalog_.reset(); }
+  public void reset() throws CatalogException {
+    srcCatalog_.reset(EventSequence.getUnusedTimeline());
+  }
 
   /**
    * Returns the Table for the given name, loading the table's metadata if necessary.

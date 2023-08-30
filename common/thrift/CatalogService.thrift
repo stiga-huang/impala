@@ -287,6 +287,9 @@ struct TUpdateCatalogRequest {
 // Response from a TUpdateCatalogRequest
 struct TUpdateCatalogResponse {
   1: required TCatalogUpdateResult result
+
+  // Profile of the DDL execution in catalogd
+  2: optional RuntimeProfile.TRuntimeProfileNode profile
 }
 
 // Parameters of REFRESH/INVALIDATE METADATA commands
@@ -327,6 +330,9 @@ struct TResetMetadataRequest {
 // Response from TResetMetadataRequest
 struct TResetMetadataResponse {
   1: required TCatalogUpdateResult result
+
+  // Profile of the DDL execution in catalogd
+  2: optional RuntimeProfile.TRuntimeProfileNode profile
 }
 
 // Request to GetFunctions()

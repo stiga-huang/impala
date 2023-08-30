@@ -215,7 +215,7 @@ public class FrontendFixture {
       }
       try {
         KuduTable kuduTable = (KuduTable) dummyTable;
-        kuduTable.loadSchemaFromKudu();
+        kuduTable.loadSchemaFromKudu(EventSequence.getUnusedTimeline());
       } catch (ImpalaRuntimeException e) {
         e.printStackTrace();
         fail("Failed to add test table:\n" + createTableSql);

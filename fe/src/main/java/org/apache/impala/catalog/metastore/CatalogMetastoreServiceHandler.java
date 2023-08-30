@@ -72,6 +72,7 @@ import org.apache.impala.service.CatalogOpExecutor;
 import org.apache.impala.service.MetadataOp;
 import org.apache.impala.thrift.TImpalaTableType;
 import org.apache.impala.thrift.TTableName;
+import org.apache.impala.util.EventSequence;
 import org.apache.thrift.TException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -873,8 +874,11 @@ public class CatalogMetastoreServiceHandler extends MetastoreServiceHandler {
     try {
       String sourceDb = MetaStoreUtils.parseDbName(sourceDbWithCatalog, serverConf_)[1];
       String destDb = MetaStoreUtils.parseDbName(destDbWithCatalog, serverConf_)[1];
-      srcTbl = catalogOpExecutor_.getExistingTable(sourceDb, sourceTbl, apiName);
-      destinationTbl = catalogOpExecutor_.getExistingTable(destDb, destTbl, apiName);
+      EventSequence catalogTimeline = EventSequence.getUnusedTimeline();
+      srcTbl = catalogOpExecutor_.getExistingTable(sourceDb, sourceTbl, apiName,
+          catalogTimeline);
+      destinationTbl = catalogOpExecutor_.getExistingTable(destDb, destTbl, apiName,
+          catalogTimeline);
 
       if (!catalog_.tryWriteLock(
           new org.apache.impala.catalog.Table[] {srcTbl, destinationTbl})) {
@@ -917,8 +921,11 @@ public class CatalogMetastoreServiceHandler extends MetastoreServiceHandler {
     try {
       String sourceDb = MetaStoreUtils.parseDbName(sourceDbWithCatalog, serverConf_)[1];
       String destDb = MetaStoreUtils.parseDbName(destDbWithCatalog, serverConf_)[1];
-      srcTbl = catalogOpExecutor_.getExistingTable(sourceDb, sourceTbl, apiName);
-      destinationTbl = catalogOpExecutor_.getExistingTable(destDb, destTbl, apiName);
+      EventSequence catalogTimeline = EventSequence.getUnusedTimeline();
+      srcTbl = catalogOpExecutor_.getExistingTable(sourceDb, sourceTbl, apiName,
+          catalogTimeline);
+      destinationTbl = catalogOpExecutor_.getExistingTable(destDb, destTbl, apiName,
+          catalogTimeline);
 
       if (!catalog_.tryWriteLock(
           new org.apache.impala.catalog.Table[] {srcTbl, destinationTbl})) {
@@ -1212,7 +1219,8 @@ public class CatalogMetastoreServiceHandler extends MetastoreServiceHandler {
     org.apache.impala.catalog.Table tbl = null;
     try {
       String dbName = MetaStoreUtils.parseDbName(dbNameWithCatalog, serverConf_)[1];
-      tbl = catalogOpExecutor_.getExistingTable(dbName, tblName, apiName);
+      tbl = catalogOpExecutor_.getExistingTable(dbName, tblName, apiName,
+          EventSequence.getUnusedTimeline());
     } catch (Exception e) {
       rethrowException(e, apiName);
     }

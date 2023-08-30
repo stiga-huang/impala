@@ -43,6 +43,7 @@ import org.apache.impala.thrift.TTable;
 import org.apache.impala.thrift.TTableInfoSelector;
 import org.apache.impala.thrift.TTableName;
 import org.apache.impala.util.AcidUtils;
+import org.apache.impala.util.EventSequence;
 import org.apache.thrift.TDeserializer;
 import org.apache.thrift.TException;
 import org.apache.thrift.TSerializer;
@@ -121,7 +122,7 @@ public class PartialCatalogInfoWriteIdTest {
           st.stop().elapsed(TimeUnit.MILLISECONDS));
       client.close();
     }
-    catalog_.reset();
+    catalog_.reset(EventSequence.getUnusedTimeline());
   }
 
   private static String getTblProperties() {
@@ -215,8 +216,8 @@ public class PartialCatalogInfoWriteIdTest {
     ValidWriteIdList validWriteIdList = getValidWriteIdList(testDbName, testTblName);
     // now insert into the table to advance the writeId
     executeHiveSql("insert into " + getTestTblName() + " values (2)");
-    catalog_.invalidateTable(new TTableName(testDbName, testTblName), new Reference<>()
-      , new Reference<>());
+    catalog_.invalidateTable(new TTableName(testDbName, testTblName), new Reference<>(),
+        new Reference<>(), EventSequence.getUnusedTimeline());
     Table tblAfterReload = catalog_.getOrLoadTable(testDbName, testTblName, "test", null);
     long tblVersion = tblAfterReload.getCatalogVersion();
     // issue a request which is older than what we have in catalog
@@ -701,7 +702,7 @@ public class PartialCatalogInfoWriteIdTest {
         + "functional_orc_def.alltypes");
     executeHiveSql("delete from " + getTestFullAcidTblName()
         + " where id % 2 = 0");
-    catalog_.reset();
+    catalog_.reset(EventSequence.getUnusedTimeline());
     Table tbl = catalog_.getOrLoadTable(testDbName, testAcidTblName, "test", null);
     Assert.assertFalse("Table must be loaded", tbl instanceof IncompleteTable);
     ValidWriteIdList olderWriteIdList = getValidWriteIdList(testDbName, testAcidTblName);
@@ -886,7 +887,7 @@ public class PartialCatalogInfoWriteIdTest {
 
   private void invalidateTbl(String db, String tbl) throws CatalogException {
     catalog_.invalidateTable(new TTableName(db, tbl), new Reference<>(),
-      new Reference<>());
+      new Reference<>(), EventSequence.getUnusedTimeline());
     Assert.assertTrue("Table must not be loaded",
       catalog_.getTable(db, tbl) instanceof IncompleteTable);
   }

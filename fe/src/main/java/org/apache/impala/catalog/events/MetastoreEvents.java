@@ -75,6 +75,7 @@ import org.apache.impala.service.CatalogOpExecutor;
 import org.apache.impala.thrift.TPartitionKeyValue;
 import org.apache.impala.thrift.TTableName;
 import org.apache.impala.util.AcidUtils;
+import org.apache.impala.util.EventSequence;
 import org.apache.impala.util.MetaStoreUtil;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
@@ -2738,7 +2739,7 @@ public class MetastoreEvents {
         return ;
       }
       catalog_.invalidateTable(tbl.getTableName().toThrift(),
-          tblWasRemoved, dbWasAdded);
+          tblWasRemoved, dbWasAdded, EventSequence.getUnusedTimeline());
       LOG.info("Table " + tbl.getFullName() + " is invalidated from catalog cache");
     }
   }

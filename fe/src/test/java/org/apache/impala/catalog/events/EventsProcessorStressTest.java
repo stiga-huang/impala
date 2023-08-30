@@ -30,6 +30,7 @@ import org.apache.impala.catalog.CatalogServiceCatalog;
 import org.apache.impala.catalog.MetaStoreClientPool.MetaStoreClient;
 import org.apache.impala.catalog.events.MetastoreEventsProcessor.EventProcessorStatus;
 import org.apache.impala.service.CatalogOpExecutor;
+import org.apache.impala.util.EventSequence;
 import org.apache.impala.util.RandomHiveQueryRunner;
 import org.apache.impala.common.Pair;
 import org.apache.impala.compat.MetastoreShim;
@@ -162,7 +163,8 @@ public class EventsProcessorStressTest {
                 PatternMatcher.MATCHER_MATCH_ALL);
             for (String tbl : tablenames) {
               catalog_.reloadTable(catalog_.getTable(dbName, tbl), "test refresh "
-                  + "operation for events stress test");
+                  + "operation for events stress test",
+                  EventSequence.getUnusedTimeline());
             }
             // wait for a random duration between 0 and 3 seconds. We want the refresh
             // clients to aggressive than the event polling threads
