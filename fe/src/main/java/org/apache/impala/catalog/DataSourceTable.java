@@ -23,6 +23,7 @@ import java.util.Set;
 import org.apache.hadoop.hive.common.ValidWriteIdList;
 import org.apache.hadoop.hive.metastore.IMetaStoreClient;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
+import org.apache.impala.util.EventSequence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.impala.extdatasource.v1.ExternalDataSource;
@@ -170,8 +171,8 @@ public class DataSourceTable extends Table implements FeDataSourceTable {
 
   @Override
   public void load(boolean reuseMetadata, IMetaStoreClient client,
-      org.apache.hadoop.hive.metastore.api.Table msTbl, String reason)
-      throws TableLoadingException {
+      org.apache.hadoop.hive.metastore.api.Table msTbl, String reason,
+      EventSequence catalogTimeline) throws TableLoadingException {
     Preconditions.checkNotNull(msTbl);
     Table.LOADING_TABLES.incrementAndGet();
     msTable_ = msTbl;

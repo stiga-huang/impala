@@ -87,8 +87,10 @@ import org.apache.impala.thrift.TUpdateCatalogRequest;
 import org.apache.impala.thrift.TUpdateTableUsageRequest;
 import org.apache.impala.util.AuthorizationUtil;
 import org.apache.impala.util.CatalogOpUtil;
+import org.apache.impala.util.EventSequence;
 import org.apache.impala.util.GlogAppender;
 import org.apache.impala.util.MetaStoreUtil;
+import org.apache.impala.util.NoOpEventSequence;
 import org.apache.impala.util.PatternMatcher;
 import org.apache.impala.util.ThreadNameAnnotator;
 import org.apache.impala.util.TUniqueIdUtil;
@@ -176,7 +178,7 @@ public class JniCatalog {
     catalogMetastoreServer_.start();
 
     try {
-      catalog_.reset();
+      catalog_.reset(NoOpEventSequence.INSTANCE);
     } catch (CatalogException e) {
       LOG.error("Error initializing Catalog. Please run 'invalidate metadata'", e);
     }

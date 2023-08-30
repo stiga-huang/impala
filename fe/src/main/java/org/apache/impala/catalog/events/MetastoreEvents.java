@@ -80,7 +80,9 @@ import org.apache.impala.service.CatalogOpExecutor;
 import org.apache.impala.thrift.TPartitionKeyValue;
 import org.apache.impala.thrift.TTableName;
 import org.apache.impala.util.AcidUtils;
+import org.apache.impala.util.EventSequence;
 import org.apache.impala.util.MetaStoreUtil;
+import org.apache.impala.util.NoOpEventSequence;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 
@@ -1755,7 +1757,7 @@ public class MetastoreEvents {
         // No-Op
       } else if (getEventId() > tbl.getCreateEventId()) {
         catalog_.invalidateTable(tbl.getTableName().toThrift(),
-            new Reference<>(), new Reference<>());
+            new Reference<>(), new Reference<>(), NoOpEventSequence.INSTANCE);
         LOG.info("Table " + tbl.getFullName() + " is invalidated from catalog cache" +
             " since eventSync is turned on for this table.");
       } else {
@@ -3023,7 +3025,7 @@ public class MetastoreEvents {
         return ;
       }
       catalog_.invalidateTable(tbl.getTableName().toThrift(),
-          tblWasRemoved, dbWasAdded);
+          tblWasRemoved, dbWasAdded, NoOpEventSequence.INSTANCE);
       LOG.info("Table " + tbl.getFullName() + " is invalidated from catalog cache");
     }
   }

@@ -700,6 +700,7 @@ void ClientRequestState::ExecDdlRequestImpl(bool exec_in_worker_thread) {
 
   // Indirectly check if running in thread async_exec_thread_.
   if (exec_in_worker_thread) {
+    query_events_->MarkEvent("Async DDL thread started");
     VLOG_QUERY << "Running in worker thread";
     DCHECK(exec_state() == ExecState::PENDING);
 
@@ -714,17 +715,10 @@ void ClientRequestState::ExecDdlRequestImpl(bool exec_in_worker_thread) {
 
   Status status = catalog_op_executor_->Exec(exec_req.catalog_op_request);
   query_events_->MarkEvent("CatalogDdlRequest finished");
+  AddCatalogTimeline();
   {
     lock_guard<mutex> l(lock_);
     RETURN_VOID_IF_ERROR(UpdateQueryStatus(status, exec_in_worker_thread));
-  }
-
-  if (catalog_op_executor_->ddl_exec_response() != nullptr &&
-      catalog_op_executor_->ddl_exec_response()->__isset.profile) {
-    for (const TEventSequence& catalog_timeline :
-        catalog_op_executor_->ddl_exec_response()->profile.event_sequences) {
-      summary_profile_->AddEventSequence(catalog_timeline.name, catalog_timeline);
-    }
   }
 
   // If this is a CTAS request, there will usually be more work to do
@@ -809,6 +803,7 @@ Status ClientRequestState::ExecDdlRequest() {
 void ClientRequestState::ExecLoadDataRequestImpl(bool exec_in_worker_thread) {
   const TExecRequest& exec_req = exec_request();
   if (exec_in_worker_thread) {
+    query_events_->MarkEvent("Async DDL thread started");
     VLOG_QUERY << "Running in worker thread";
     DCHECK(exec_state() == ExecState::PENDING);
     UpdateNonErrorExecState(ExecState::RUNNING);
@@ -854,6 +849,12 @@ void ClientRequestState::ExecLoadDataRequestImpl(bool exec_in_worker_thread) {
   TUpdateCatalogResponse resp;
   status = client.DoRpc(
       &CatalogServiceClientWrapper::UpdateCatalog, catalog_update, &resp);
+  query_events_->MarkEvent("UpdateCatalog finished");
+  if (resp.__isset.profile) {
+    for (const TEventSequence& catalog_timeline : resp.profile.event_sequences) {
+      summary_profile_->AddEventSequence(catalog_timeline.name, catalog_timeline);
+    }
+  }
   {
     lock_guard<mutex> l(lock_);
     RETURN_VOID_IF_ERROR(UpdateQueryStatus(status, exec_in_worker_thread));
@@ -1577,6 +1578,18 @@ Status ClientRequestState::UpdateCatalog() {
       if (status.ok()) {
         status = client.DoRpc(
             &CatalogServiceClientWrapper::UpdateCatalog, catalog_update, &resp);
+        query_events_->MarkEvent("UpdateCatalog finished");
+      }
+      if (resp.__isset.profile) {
+        for (const TEventSequence& catalog_timeline : resp.profile.event_sequences) {
+          string timeline_name = catalog_timeline.name;
+          // For CTAS, we already have a timeline for the CreateTable execution.
+          // Use another name for the INSERT timeline.
+          if (summary_profile_->GetEventSequence(timeline_name) != nullptr) {
+            timeline_name += " 2";
+          }
+          summary_profile_->AddEventSequence(timeline_name, catalog_timeline);
+        }
       }
       if (status.ok()) status = Status(resp.result.status);
       if (!status.ok()) {
@@ -1783,6 +1796,7 @@ Status ClientRequestState::UpdateTableAndColumnStats(
       child_queries[0]->result_data(),
       col_stats_schema,
       col_stats_data);
+  AddCatalogTimeline();
   {
     lock_guard<mutex> l(lock_);
     RETURN_IF_ERROR(UpdateQueryStatus(status));
@@ -2365,6 +2379,16 @@ void ClientRequestState::AddTableResetHints(const TConvertTableRequest& params,
   string table_reset_hint("Your table might have been renamed. To reset the name "
       "try running:\n" + params.reset_table_name_query + ";");
   status->MergeStatus(Status(table_reset_hint));
+}
+
+void ClientRequestState::AddCatalogTimeline() {
+  if (catalog_op_executor_ != nullptr
+      && catalog_op_executor_->catalog_profile() != nullptr) {
+    for (const TEventSequence& catalog_timeline :
+        catalog_op_executor_->catalog_profile()->event_sequences) {
+      summary_profile_->AddEventSequence(catalog_timeline.name, catalog_timeline);
+    }
+  }
 }
 
 }
