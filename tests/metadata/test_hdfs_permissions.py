@@ -52,7 +52,6 @@ class TestHdfsPermissions(ImpalaTestSuite):
     self.client.execute('drop table if exists %s' % TEST_TBL)
     self.hdfs_client.delete_file_dir('test-warehouse/%s' % TEST_TBL, recursive=True)
 
-  @SkipIfCatalogV2.impala_7539()
   def test_insert_into_read_only_table(self, vector):
     permission = 444
     if IS_ISILON:

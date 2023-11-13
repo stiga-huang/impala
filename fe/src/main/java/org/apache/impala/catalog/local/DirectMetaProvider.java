@@ -52,6 +52,7 @@ import org.apache.impala.catalog.local.LocalIcebergTable.TableParams;
 import org.apache.impala.common.Pair;
 import org.apache.impala.compat.MetastoreShim;
 import org.apache.impala.service.BackendConfig;
+import org.apache.impala.thrift.TAccessLevel;
 import org.apache.impala.thrift.TBackendGflags;
 import org.apache.impala.thrift.TBriefTableMeta;
 import org.apache.impala.thrift.TNetworkAddress;
@@ -493,6 +494,11 @@ class DirectMetaProvider implements MetaProvider {
       throw new UnsupportedOperationException("Compaction id is not provided with " +
           "DirectMetaProvider implementation");
     }
+
+    @Override
+    public TAccessLevel getAccessLevel() {
+      return TAccessLevel.READ_WRITE;
+    }
   }
 
   private class TableMetaRefImpl implements TableMetaRef {
@@ -532,6 +538,11 @@ class DirectMetaProvider implements MetaProvider {
     public List<VirtualColumn> getVirtualColumns() {
       throw new UnsupportedOperationException("Virtual columns are not supported with " +
           "DirectMetaProvider implementation");
+    }
+
+    @Override
+    public TAccessLevel getAccessLevel() {
+      return TAccessLevel.READ_WRITE;
     }
   }
 

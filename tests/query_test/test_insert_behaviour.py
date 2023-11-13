@@ -198,7 +198,6 @@ class TestInsertBehaviour(ImpalaTestSuite):
     check_has_acls("p1=1/p2=2/p3=30", "default:group:new_leaf_group:-w-")
 
   @SkipIfFS.hdfs_acls
-  @SkipIfCatalogV2.impala_7539()
   def test_insert_file_permissions(self, unique_database):
     """Test that INSERT correctly respects file permission (minimum ACLs)"""
     table = "`{0}`.`insert_acl_permissions`".format(unique_database)
@@ -248,7 +247,6 @@ class TestInsertBehaviour(ImpalaTestSuite):
     self.execute_query_expect_success(self.client, insert_query)
 
   @SkipIfFS.hdfs_acls
-  @SkipIfCatalogV2.impala_7539()
   def test_mixed_partition_permissions(self, unique_database):
     """
     Test that INSERT and LOAD DATA into explicit partitions is allowed even
@@ -327,7 +325,6 @@ class TestInsertBehaviour(ImpalaTestSuite):
     load_data(self.execute_query_expect_success, "added_part")
 
   @SkipIfFS.hdfs_acls
-  @SkipIfCatalogV2.impala_7539()
   def test_readonly_table_dir(self, unique_database):
     """
     Test that, if a partitioned table has a read-only base directory,
@@ -358,7 +355,6 @@ class TestInsertBehaviour(ImpalaTestSuite):
 
   @SkipIfFS.hdfs_acls
   @SkipIfDockerizedCluster.insert_acls
-  @SkipIfCatalogV2.impala_7539()
   def test_insert_acl_permissions(self, unique_database):
     """Test that INSERT correctly respects ACLs"""
     table = "`{0}`.`insert_acl_permissions`".format(unique_database)
@@ -435,7 +431,6 @@ class TestInsertBehaviour(ImpalaTestSuite):
     self.execute_query_expect_success(self.client, insert_query)
 
   @SkipIfFS.hdfs_acls
-  @SkipIfCatalogV2.impala_7539()
   def test_load_permissions(self, unique_database):
     # We rely on test_insert_acl_permissions() to exhaustively check that ACL semantics
     # are correct. Here we just validate that LOADs can't be done when we cannot read from
@@ -559,7 +554,6 @@ class TestInsertBehaviour(ImpalaTestSuite):
 
   @SkipIfFS.hdfs_acls
   @SkipIfDockerizedCluster.insert_acls
-  @SkipIfCatalogV2.impala_7539()
   def test_multiple_group_acls(self, unique_database):
     """Test that INSERT correctly respects multiple group ACLs"""
     table = "`{0}`.`insert_group_acl_permissions`".format(unique_database)

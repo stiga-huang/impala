@@ -80,6 +80,8 @@ public class LocalFsPartition implements FeFsPartition {
   // SHOW TABLE STATS / SHOW PARTITIONS.
   private final boolean isMarkedCached_;
 
+  private final TAccessLevel accessLevel_;
+
   public LocalFsPartition(LocalFsTable table, LocalPartitionSpec spec,
       Map<String, String> hmsParameters, long writeId,
       HdfsStorageDescriptor hdfsStorageDescriptor,
@@ -87,7 +89,7 @@ public class LocalFsPartition implements FeFsPartition {
       ImmutableList<FileDescriptor> insertFileDescriptors,
       ImmutableList<FileDescriptor> deleteFileDescriptors,
       byte [] partitionStats, boolean hasIncrementalStats, boolean isMarkedCached,
-      HdfsPartitionLocationCompressor.Location location) {
+      HdfsPartitionLocationCompressor.Location location, TAccessLevel accessLevel) {
     table_ = Preconditions.checkNotNull(table);
     spec_ = Preconditions.checkNotNull(spec);
     hmsParameters_ = hmsParameters;
@@ -100,6 +102,7 @@ public class LocalFsPartition implements FeFsPartition {
     partitionStats_ = partitionStats;
     hasIncrementalStats_ = hasIncrementalStats;
     isMarkedCached_ = isMarkedCached;
+    accessLevel_ = accessLevel;
   }
 
   @Override
@@ -180,8 +183,7 @@ public class LocalFsPartition implements FeFsPartition {
 
   @Override
   public TAccessLevel getAccessLevel() {
-    // TODO(todd): implement me
-    return TAccessLevel.READ_WRITE;
+    return accessLevel_;
   }
 
   @Override
@@ -273,7 +275,7 @@ public class LocalFsPartition implements FeFsPartition {
         fileDescriptors_ : insertFileDescriptors_;
     return new LocalFsPartition(table_, spec_, hmsParameters_, writeId_,
         hdfsStorageDescriptor_, fds, ImmutableList.of(), ImmutableList.of(),
-        partitionStats_, hasIncrementalStats_, isMarkedCached_, location_);
+        partitionStats_, hasIncrementalStats_, isMarkedCached_, location_, accessLevel_);
   }
 
   @Override
@@ -282,6 +284,6 @@ public class LocalFsPartition implements FeFsPartition {
     return new LocalFsPartition(table_, spec_, hmsParameters_, writeId_,
         hdfsStorageDescriptor_, deleteFileDescriptors_,
         ImmutableList.of(), ImmutableList.of(), partitionStats_,
-        hasIncrementalStats_, isMarkedCached_, location_);
+        hasIncrementalStats_, isMarkedCached_, location_, accessLevel_);
   }
 }

@@ -55,6 +55,7 @@ import org.apache.impala.catalog.local.MetaProvider.TableMetaRef;
 import org.apache.impala.common.AnalysisException;
 import org.apache.impala.common.FileSystemUtil;
 import org.apache.impala.thrift.CatalogObjectsConstants;
+import org.apache.impala.thrift.TAccessLevel;
 import org.apache.impala.thrift.THdfsPartition;
 import org.apache.impala.thrift.THdfsTable;
 import org.apache.impala.thrift.TNetworkAddress;
@@ -66,6 +67,7 @@ import org.apache.impala.util.AcidUtils;
 import org.apache.impala.util.AvroSchemaConverter;
 import org.apache.impala.util.AvroSchemaUtils;
 import org.apache.impala.util.ListMap;
+import org.apache.impala.util.TAccessLevelUtil;
 import org.apache.thrift.TException;
 
 import com.google.common.base.Preconditions;
@@ -287,13 +289,24 @@ public class LocalFsTable extends LocalTable implements FeFsTable {
 
   @Override
   public boolean hasWriteAccessToBaseDir() {
-    // TODO(todd): implement me properly
-    return true;
+    return ref_ == null || TAccessLevelUtil.impliesWriteAccess(ref_.getAccessLevel());
   }
 
   @Override
   public String getFirstLocationWithoutWriteAccess() {
-    // TODO(todd): implement me properly
+    if (!hasWriteAccessToBaseDir()) return getHdfsBaseDir();
+    Collection<? extends FeFsPartition> parts;
+    if (ref_ != null) {
+      parts = FeCatalogUtils.loadAllPartitions(this);
+    } else {
+      // If this is a CTAS target, we don't want to try to load the partition list.
+      parts = Collections.emptyList();
+    }
+    for (FeFsPartition p : parts) {
+      if (!TAccessLevelUtil.impliesWriteAccess(p.getAccessLevel())) {
+        return p.getLocation();
+      }
+    }
     return null;
   }
 
@@ -418,7 +431,8 @@ public class LocalFsTable extends LocalTable implements FeFsTable {
     return new LocalFsPartition(this, spec, Collections.emptyMap(), /*writeId=*/-1,
         hdfsStorageDescriptor, /*fileDescriptors=*/null, /*insertFileDescriptors=*/null,
         /*deleteFileDescriptors=*/null, /*partitionStats=*/null,
-        /*hasIncrementalStats=*/false, /*isMarkedCached=*/false, /*location*/null);
+        /*hasIncrementalStats=*/false, /*isMarkedCached=*/false, /*location*/null,
+        TAccessLevel.READ_WRITE);
   }
 
   @Override
@@ -496,7 +510,7 @@ public class LocalFsTable extends LocalTable implements FeFsTable {
       LocalFsPartition part = new LocalFsPartition(this, spec, p.getHmsParameters(),
           p.getWriteId(), p.getInputFormatDescriptor(), fds, p.getInsertFileDescriptors(),
           p.getDeleteFileDescriptors(), p.getPartitionStats(), p.hasIncrementalStats(),
-          p.isMarkedCached(), p.getLocation());
+          p.isMarkedCached(), p.getLocation(), p.getAccessLevel());
       ret.add(part);
     }
     return ret;

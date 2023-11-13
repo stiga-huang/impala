@@ -76,6 +76,7 @@ import org.apache.impala.service.FeSupport;
 import org.apache.impala.service.FrontendProfile;
 import org.apache.impala.service.MetadataOp;
 import org.apache.impala.thrift.CatalogLookupStatus;
+import org.apache.impala.thrift.TAccessLevel;
 import org.apache.impala.thrift.TBackendGflags;
 import org.apache.impala.thrift.TBriefTableMeta;
 import org.apache.impala.thrift.TCatalogInfoSelector;
@@ -772,7 +773,8 @@ public class CatalogdMetaProvider implements MetaProvider {
                 dbName, tableName, resp.table_info.hms_table, resp.object_version_number,
                 new SqlConstraints(primaryKeys, foreignKeys),
                 resp.table_info.valid_write_ids, resp.table_info.is_marked_cached,
-                resp.table_info.partition_prefixes, resp.table_info.virtual_columns);
+                resp.table_info.access_level, resp.table_info.partition_prefixes,
+                resp.table_info.virtual_columns);
            }
       });
     // The table list is populated based on tables in a given Db in catalogd. If a table
@@ -1045,7 +1047,7 @@ public class CatalogdMetaProvider implements MetaProvider {
           part.write_id, hdfsStorageDescriptor,
           fds, insertFds, deleteFds, part.getPartition_stats(),
           part.has_incremental_stats, part.is_marked_cached, location,
-          part.last_compaction_id);
+          part.last_compaction_id, part.access_level);
 
       checkResponse(partRef != null, req, "returned unexpected partition id %s", part.id);
 
@@ -1699,11 +1701,14 @@ public class CatalogdMetaProvider implements MetaProvider {
     private final boolean isMarkedCached_;
     private final long lastCompactionId_;
 
+    private final TAccessLevel accessLevel_;
+
     public PartitionMetadataImpl(Map<String, String> hmsParameters, long writeId,
         HdfsStorageDescriptor hdfsStorageDescriptor, ImmutableList<FileDescriptor> fds,
         ImmutableList<FileDescriptor> insertFds, ImmutableList<FileDescriptor> deleteFds,
         byte[] partitionStats, boolean hasIncrementalStats, boolean isMarkedCached,
-        HdfsPartitionLocationCompressor.Location location, long lastCompactionId) {
+        HdfsPartitionLocationCompressor.Location location, long lastCompactionId,
+        TAccessLevel accessLevel) {
       this.hmsParameters_ = hmsParameters;
       this.writeId_ = writeId;
       this.hdfsStorageDescriptor_ = hdfsStorageDescriptor;
@@ -1715,6 +1720,7 @@ public class CatalogdMetaProvider implements MetaProvider {
       this.hasIncrementalStats_ = hasIncrementalStats;
       this.isMarkedCached_ = isMarkedCached;
       this.lastCompactionId_ = lastCompactionId;
+      this.accessLevel_ = accessLevel;
     }
 
     /**
@@ -1732,7 +1738,7 @@ public class CatalogdMetaProvider implements MetaProvider {
           deleteFds_, origIndex, dstIndex);
       return new PartitionMetadataImpl(hmsParameters_, writeId_, hdfsStorageDescriptor_,
           fds, insertFds, deleteFds, partitionStats_, hasIncrementalStats_,
-          isMarkedCached_, location_, lastCompactionId_);
+          isMarkedCached_, location_, lastCompactionId_, accessLevel_);
     }
 
     private static ImmutableList<FileDescriptor> cloneFdsRelativeToHostIndex(
@@ -1790,6 +1796,9 @@ public class CatalogdMetaProvider implements MetaProvider {
 
     @Override
     public long getLastCompactionId() { return lastCompactionId_; }
+
+    @Override
+    public TAccessLevel getAccessLevel() { return accessLevel_; }
   }
 
   /**
@@ -1833,11 +1842,13 @@ public class CatalogdMetaProvider implements MetaProvider {
      */
     private final boolean isMarkedCached_;
 
+    private final TAccessLevel accessLevel_;
+
     private final HdfsPartitionLocationCompressor partitionLocationCompressor_;
 
     public TableMetaRefImpl(String dbName, String tableName,
         Table msTable, long catalogVersion, SqlConstraints sqlConstraints,
-        TValidWriteIdList validWriteIds, boolean isMarkedCached,
+        TValidWriteIdList validWriteIds, boolean isMarkedCached, TAccessLevel accessLevel,
         List<String> locationPrefixes, List<TColumn> tvirtCols) {
       this.dbName_ = dbName;
       this.tableName_ = tableName;
@@ -1846,6 +1857,7 @@ public class CatalogdMetaProvider implements MetaProvider {
       this.sqlConstraints_ = sqlConstraints;
       this.validWriteIds_ = validWriteIds;
       this.isMarkedCached_ = isMarkedCached;
+      this.accessLevel_ = accessLevel;
       // Non-hdfs tables will have null locationPrefixes.
       this.partitionLocationCompressor_ = (locationPrefixes == null) ? null :
           new HdfsPartitionLocationCompressor(
@@ -1885,6 +1897,9 @@ public class CatalogdMetaProvider implements MetaProvider {
     public List<VirtualColumn> getVirtualColumns() {
       return virtualColumns_;
     }
+
+    @Override
+    public TAccessLevel getAccessLevel() { return accessLevel_; }
   }
 
   /**

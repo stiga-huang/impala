@@ -475,6 +475,8 @@ struct TPartialPartitionInfo {
   11: optional i64 write_id
   12: optional CatalogObjects.THdfsStorageDescriptor hdfs_storage_descriptor
   13: optional CatalogObjects.THdfsPartitionLocation location
+
+  15: optional CatalogObjects.TAccessLevel access_level
 }
 
 // Returned information about a Table, as selected by TTableInfoSelector.
@@ -521,6 +523,8 @@ struct TPartialTableInfo {
 
   // Iceberg table information
   13: optional CatalogObjects.TIcebergTable iceberg_table
+
+  14: optional CatalogObjects.TAccessLevel access_level
 }
 
 // Table types in the user's perspective. Though we treat materialized view as table

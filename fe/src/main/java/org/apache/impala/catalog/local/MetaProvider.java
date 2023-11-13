@@ -38,6 +38,7 @@ import org.apache.impala.catalog.SqlConstraints;
 import org.apache.impala.catalog.VirtualColumn;
 import org.apache.impala.catalog.local.LocalIcebergTable.TableParams;
 import org.apache.impala.common.Pair;
+import org.apache.impala.thrift.TAccessLevel;
 import org.apache.impala.thrift.TBriefTableMeta;
 import org.apache.impala.thrift.TNetworkAddress;
 import org.apache.impala.thrift.TPartialTableInfo;
@@ -161,6 +162,7 @@ public interface MetaProvider {
     boolean isPartitioned();
     boolean isTransactional();
     List<VirtualColumn> getVirtualColumns();
+    TAccessLevel getAccessLevel();
   }
 
   /**
@@ -187,6 +189,7 @@ public interface MetaProvider {
     boolean hasIncrementalStats();
     boolean isMarkedCached();
     long getLastCompactionId();
+    TAccessLevel getAccessLevel();
   }
 
   public TValidWriteIdList getValidWriteIdList(TableMetaRef ref);

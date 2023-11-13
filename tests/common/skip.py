@@ -230,13 +230,6 @@ class SkipIfCatalogV2:
       reason="IMPALA-8489: TestRecoverPartitions.test_post_invalidate "
              "IllegalStateException.")
 
-  # TODO: IMPALA-7539: fix this bug.
-  @classmethod
-  def impala_7539(self):
-    return pytest.mark.skipif(
-      IMPALA_TEST_CLUSTER_PROPERTIES.is_catalog_v2_cluster(),
-      reason="IMPALA-7539: support HDFS permission checks for LocalCatalog")
-
   @classmethod
   def hms_event_polling_enabled(self):
     return pytest.mark.skipif(

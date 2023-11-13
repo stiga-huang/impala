@@ -2284,12 +2284,14 @@ public class HdfsTable extends Table implements FeFsTable {
         }
 
         partInfo.setIs_marked_cached(part.isMarkedCached());
+        partInfo.setAccess_level(part.getAccessLevel());
         resp.table_info.partitions.add(partInfo);
       }
     }
     // In most of the cases, the prefix map only contains one item for the table location.
     // Here we always send it since it's small.
     resp.table_info.setPartition_prefixes(partitionLocationCompressor_.getPrefixes());
+    resp.table_info.setAccess_level(accessLevel_);
 
     if (reqWriteIdList != null) {
       LOG.debug("{} files filtered out of table {} for {}. Hit rate : {}",
