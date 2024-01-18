@@ -106,6 +106,10 @@ target_link_libraries(impalad
   ${IMPALA_LINK_LIBS}
 )
 
+install(FILES ${STATESTORED_SYMLINK} DESTINATION ${IMPALA_INSTALLDIR}/sbin)
+install(FILES ${CATALOGD_SYMLINK} DESTINATION ${IMPALA_INSTALLDIR}/sbin)
+install(TARGETS impalad DESTINATION ${IMPALA_INSTALLDIR}/sbin)
+
 target_link_libraries(unifiedbetests
   ${JAVA_JSIG_LIBRARY} ${UNIFIED_TEST_LINK_LIBS})
 ADD_DEPENDENCIES(unified-be-test-executable unifiedbetests)
