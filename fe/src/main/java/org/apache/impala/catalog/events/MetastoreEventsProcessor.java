@@ -48,7 +48,6 @@ import org.apache.impala.catalog.CatalogException;
 import org.apache.impala.catalog.CatalogServiceCatalog;
 import org.apache.impala.catalog.Db;
 import org.apache.impala.catalog.HdfsTable;
-import org.apache.impala.catalog.MetaStoreClientPool;
 import org.apache.impala.catalog.MetaStoreClientPool.MetaStoreClient;
 import org.apache.impala.catalog.MetastoreClientInstantiationException;
 import org.apache.impala.catalog.Table;
@@ -61,6 +60,7 @@ import org.apache.impala.common.Metrics;
 import org.apache.impala.common.PrintUtils;
 import org.apache.impala.compat.MetastoreShim;
 import org.apache.impala.service.CatalogOpExecutor;
+import org.apache.impala.thrift.TEventBatchProgressInfo;
 import org.apache.impala.thrift.TEventProcessorMetrics;
 import org.apache.impala.thrift.TEventProcessorMetricsSummaryResponse;
 import org.apache.impala.util.MetaStoreUtil;
@@ -524,6 +524,11 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
 
   // keeps track of the current event that we are processing
   private NotificationEvent currentEvent_;
+  private List<NotificationEvent> currentEventBatch_;
+  private List<MetastoreEvent> currentFilteredEvents_;
+  private long currentBatchStartTimeMs_;
+  private long currentEventStartTimeMs_;
+  private int currentEventIndex_;
 
   // keeps track of the last event id which we have synced to
   private final AtomicLong lastSyncedEventId_ = new AtomicLong(-1);
@@ -1105,6 +1110,32 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
     if (eventProcessorErrorMsg_ != null) {
       summaryResponse.setError_msg(eventProcessorErrorMsg_);
     }
+    TEventBatchProgressInfo progressInfo = new TEventBatchProgressInfo();
+    progressInfo.last_synced_event_id = lastSyncedEventId_.get();
+    progressInfo.last_synced_event_time_s = lastSyncedEventTimeSecs_.get();
+    progressInfo.latest_event_id = latestEventId_.get();
+    progressInfo.latest_event_time_s = latestEventTimeSecs_.get();
+    // Assign these lists to local variables in case they are replaced
+    // when being used below.
+    List<NotificationEvent> eventBatch = currentEventBatch_;
+    List<MetastoreEvent> filteredEvents = currentFilteredEvents_;
+    if (eventBatch != null && !eventBatch.isEmpty()) {
+      int numHmsEvents = eventBatch.size();
+      progressInfo.num_hms_events = numHmsEvents;
+      progressInfo.min_event_id = eventBatch.get(0).getEventId();
+      progressInfo.min_event_time_s = eventBatch.get(0).getEventTime();
+      NotificationEvent lastEvent = eventBatch.get(numHmsEvents - 1);
+      progressInfo.max_event_id = lastEvent.getEventId();
+      progressInfo.max_event_time_s = lastEvent.getEventTime();
+      progressInfo.current_batch_start_time_ms = currentBatchStartTimeMs_;
+      progressInfo.current_event_start_time_ms = currentEventStartTimeMs_;
+      if (filteredEvents != null) {
+        progressInfo.num_filtered_events = filteredEvents.size();
+      }
+      progressInfo.current_event_index = currentEventIndex_;
+      progressInfo.current_event = currentEvent_;
+    }
+    summaryResponse.setProgress(progressInfo);
     return summaryResponse;
   }
 
@@ -1124,6 +1155,7 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
   protected void processEvents(long currentEventId, List<NotificationEvent> events)
       throws MetastoreNotificationException {
     currentEvent_ = null;
+    currentEventBatch_ = events;
     // update the events received metric before returning
     metrics_.getMeter(EVENTS_RECEIVED_METRIC).mark(events.size());
     if (events.isEmpty()) {
@@ -1137,17 +1169,19 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
     }
     final Timer.Context context =
         metrics_.getTimer(EVENTS_PROCESS_DURATION_METRIC).time();
+    currentBatchStartTimeMs_ = System.currentTimeMillis();
     Map<MetastoreEvent, Long> eventProcessingTime = new HashMap<>();
     try {
-      List<MetastoreEvent> filteredEvents =
+      currentFilteredEvents_ =
           metastoreEventFactory_.getFilteredEvents(events, metrics_);
-      if (filteredEvents.isEmpty()) {
+      if (currentFilteredEvents_.isEmpty()) {
         NotificationEvent e = events.get(events.size() - 1);
         lastSyncedEventId_.set(e.getEventId());
         lastSyncedEventTimeSecs_.set(e.getEventTime());
         return;
       }
-      for (MetastoreEvent event : filteredEvents) {
+      currentEventIndex_ = 0;
+      for (MetastoreEvent event : currentFilteredEvents_) {
         // synchronizing each event processing reduces the scope of the lock so the a
         // potential reset() during event processing is not blocked for longer than
         // necessary
@@ -1155,14 +1189,15 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
           if (eventProcessorStatus_ != EventProcessorStatus.ACTIVE) {
             break;
           }
+          currentEventIndex_++;
           currentEvent_ = event.metastoreNotificationEvent_;
           String targetName = event.getTargetName();
           String desc = String.format("Processing %s on %s, eventId=%d",
               event.getEventType(), targetName, event.getEventId());
           try (ThreadNameAnnotator tna = new ThreadNameAnnotator(desc)) {
-            long startMs = System.currentTimeMillis();
+            currentEventStartTimeMs_ = System.currentTimeMillis();
             event.processIfEnabled();
-            long elapsedTimeMs = System.currentTimeMillis() - startMs;
+            long elapsedTimeMs = System.currentTimeMillis() - currentEventStartTimeMs_;
             eventProcessingTime.put(event, elapsedTimeMs);
           }
           deleteEventLog_.garbageCollect(event.getEventId());

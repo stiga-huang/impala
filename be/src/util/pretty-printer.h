@@ -108,7 +108,7 @@ class PrettyPrinter {
       }
 
       case TUnit::TIME_S: {
-        PrintTimeMs(value * THOUSAND, &ss);
+        PrintTimeMs(value * THOUSAND, &ss, /*print_ms*/false);
         break;
       }
 
@@ -268,7 +268,7 @@ class PrettyPrinter {
 
   /// Print the value (time in ms) to ss.
   template <typename T>
-  static void PrintTimeMs(T value, std::stringstream* ss) {
+  static void PrintTimeMs(T value, std::stringstream* ss, bool print_ms=true) {
     DCHECK_GE(value, static_cast<T>(0));
     if (value == 0) {
       *ss << "0";
@@ -291,7 +291,7 @@ class PrettyPrinter {
         value = Mod(value, SECOND);
         second = true;
       }
-      if (!hour && !minute) {
+      if (print_ms && !hour && !minute) {
         if (second) *ss << std::setw(3) << std::setfill('0');
         *ss << static_cast<int64_t>(value) << "ms";
       }

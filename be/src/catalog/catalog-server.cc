@@ -933,6 +933,105 @@ void CatalogServer::EventMetricsUrlCallback(
     document->AddMember(
         "event_processor_error_msg", error_msg, document->GetAllocator());
   }
+  const TEventBatchProgressInfo& progress_info =
+      event_processor_summary_response.progress;
+  Value progress_info_obj(kObjectType);
+  // Add lag info
+  Value last_synced_event_id(progress_info.last_synced_event_id);
+  Value last_synced_event_time_s(progress_info.last_synced_event_time_s);
+  Value latest_event_id(progress_info.latest_event_id);
+  Value latest_event_time_s(progress_info.latest_event_time_s);
+  progress_info_obj.AddMember("last_synced_event_id", last_synced_event_id,
+      document->GetAllocator());
+  progress_info_obj.AddMember("last_synced_event_time_s", last_synced_event_time_s,
+      document->GetAllocator());
+  progress_info_obj.AddMember("latest_event_id", latest_event_id,
+      document->GetAllocator());
+  progress_info_obj.AddMember("latest_event_time_s", latest_event_time_s,
+      document->GetAllocator());
+  int64_t lag_time =
+      progress_info.latest_event_time_s - progress_info.last_synced_event_time_s;
+  Value lag_time_str(PrettyPrinter::Print(lag_time, TUnit::TIME_S).c_str(),
+      document->GetAllocator());
+  progress_info_obj.AddMember("lag_time", lag_time_str, document->GetAllocator());
+  Value last_synced_event_time(
+      ToStringFromUnix(progress_info.last_synced_event_time_s).c_str(),
+      document->GetAllocator());
+  Value latest_event_time(ToStringFromUnix(progress_info.latest_event_time_s).c_str(),
+      document->GetAllocator());
+  progress_info_obj.AddMember("last_synced_event_time", last_synced_event_time,
+      document->GetAllocator());
+  progress_info_obj.AddMember("latest_event_time", latest_event_time,
+      document->GetAllocator());
+  // Add current batch info
+  if (progress_info.num_hms_events > 0) {
+    Value num_hms_events(progress_info.num_hms_events);
+    Value num_filtered_events(progress_info.num_filtered_events);
+    Value num_synced_events(progress_info.current_event_index);
+    Value synced_percent(
+        100 * progress_info.current_event_index / progress_info.num_filtered_events);
+    Value min_event_id(progress_info.min_event_id);
+    Value max_event_id(progress_info.max_event_id);
+    Value min_event_time(ToStringFromUnix(progress_info.min_event_time_s).c_str(),
+        document->GetAllocator());
+    Value max_event_time(ToStringFromUnix(progress_info.max_event_time_s).c_str(),
+        document->GetAllocator());
+    Value start_time(
+        ToStringFromUnixMillis(progress_info.current_batch_start_time_ms).c_str(),
+        document->GetAllocator());
+    Value start_time_of_event(
+        ToStringFromUnixMillis(progress_info.current_event_start_time_ms).c_str(),
+        document->GetAllocator());
+    int64_t now_ms = UnixMillis();
+    Value elapsed_time(PrettyPrinter::Print(
+        now_ms - progress_info.current_batch_start_time_ms, TUnit::TIME_MS).c_str(),
+        document->GetAllocator());
+    Value elapsed_time_current_event(PrettyPrinter::Print(
+        now_ms - progress_info.current_event_start_time_ms, TUnit::TIME_MS).c_str(),
+        document->GetAllocator());
+    progress_info_obj.AddMember("num_hms_events", num_hms_events,
+        document->GetAllocator());
+    progress_info_obj.AddMember("num_filtered_events", num_filtered_events,
+        document->GetAllocator());
+    progress_info_obj.AddMember("num_synced_events", num_synced_events,
+        document->GetAllocator());
+    progress_info_obj.AddMember("synced_percent", synced_percent,
+        document->GetAllocator());
+    progress_info_obj.AddMember("min_event_id", min_event_id, document->GetAllocator());
+    progress_info_obj.AddMember("max_event_id", max_event_id, document->GetAllocator());
+    progress_info_obj.AddMember("min_event_time", min_event_time,
+        document->GetAllocator());
+    progress_info_obj.AddMember("max_event_time", max_event_time,
+        document->GetAllocator());
+    progress_info_obj.AddMember("start_time", start_time, document->GetAllocator());
+    progress_info_obj.AddMember("elapsed_time", elapsed_time, document->GetAllocator());
+    progress_info_obj.AddMember("start_time_of_event", start_time_of_event,
+        document->GetAllocator());
+    progress_info_obj.AddMember("elapsed_time_current_event", elapsed_time_current_event,
+        document->GetAllocator());
+    if (progress_info.__isset.current_event) {
+      Value current_event(kObjectType);
+      Value event_id(progress_info.current_event.eventId);
+      Value event_time(ToStringFromUnix(progress_info.current_event.eventTime).c_str(),
+          document->GetAllocator());
+      Value event_type(progress_info.current_event.eventType.c_str(),
+          document->GetAllocator());
+      Value cat_name(progress_info.current_event.catName.c_str(),
+          document->GetAllocator());
+      Value db_name(progress_info.current_event.dbName.c_str(), document->GetAllocator());
+      Value tbl_name(progress_info.current_event.tableName.c_str(),
+          document->GetAllocator());
+      current_event.AddMember("event_id", event_id, document->GetAllocator());
+      current_event.AddMember("event_time", event_time, document->GetAllocator());
+      current_event.AddMember("event_type", event_type, document->GetAllocator());
+      current_event.AddMember("cat_name", cat_name, document->GetAllocator());
+      current_event.AddMember("db_name", db_name, document->GetAllocator());
+      current_event.AddMember("tbl_name", tbl_name, document->GetAllocator());
+      progress_info_obj.AddMember("current_event", current_event,
+          document->GetAllocator());
+    }
+  }
+  document->AddMember("progress-info", progress_info_obj, document->GetAllocator());
 }
 
 void CatalogServer::CatalogObjectsUrlCallback(const Webserver::WebRequest& req,
