@@ -369,9 +369,13 @@ Status CatalogOpExecutor::GetPartialCatalogObject(
   if (FLAGS_inject_latency_before_catalog_fetch_ms > 0) {
     SleepForMs(FLAGS_inject_latency_before_catalog_fetch_ms);
   }
+  // Non-table requests are lightweight requests that won't be blocked by table loading
+  // or table locks. Note that when loading table list of a db, the type is DB.
+  auto client_cache_ptr = (req.object_desc.type == TCatalogObjectType::TABLE) ?
+      env_->catalogd_client_cache() : env_->catalogd_lightweight_req_client_cache();
   int attempt = 0; // Used for debug action only.
   CatalogServiceConnection::RpcStatus rpc_status =
-      CatalogServiceConnection::DoRpcWithRetry(env_->catalogd_client_cache(),
+      CatalogServiceConnection::DoRpcWithRetry(client_cache_ptr,
           *ExecEnv::GetInstance()->GetCatalogdAddress().get(),
           &CatalogServiceClientWrapper::GetPartialCatalogObject, req,
           FLAGS_catalog_client_connection_num_retries,
@@ -393,7 +397,8 @@ Status CatalogOpExecutor::PrioritizeLoad(const TPrioritizeLoadRequest& req,
     TPrioritizeLoadResponse* result) {
   int attempt = 0; // Used for debug action only.
   CatalogServiceConnection::RpcStatus rpc_status =
-      CatalogServiceConnection::DoRpcWithRetry(env_->catalogd_client_cache(),
+      CatalogServiceConnection::DoRpcWithRetry(
+          env_->catalogd_lightweight_req_client_cache(),
           *ExecEnv::GetInstance()->GetCatalogdAddress().get(),
           &CatalogServiceClientWrapper::PrioritizeLoad, req,
           FLAGS_catalog_client_connection_num_retries,
@@ -421,7 +426,11 @@ Status CatalogOpExecutor::UpdateTableUsage(const TUpdateTableUsageRequest& req,
   TUpdateTableUsageResponse* resp) {
   int attempt = 0; // Used for debug action only.
   CatalogServiceConnection::RpcStatus rpc_status =
-      CatalogServiceConnection::DoRpcWithRetry(env_->catalogd_client_cache(),
+      CatalogServiceConnection::DoRpcWithRetry(
+          // The operation doesn't require table lock in catalogd. It doesn't require
+          // the table being loaded neither. So we can use clients for lightweight
+          // requests.
+          env_->catalogd_lightweight_req_client_cache(),
           *ExecEnv::GetInstance()->GetCatalogdAddress().get(),
           &CatalogServiceClientWrapper::UpdateTableUsage, req,
           FLAGS_catalog_client_connection_num_retries,
@@ -435,7 +444,8 @@ Status CatalogOpExecutor::GetNullPartitionName(
     const TGetNullPartitionNameRequest& req, TGetNullPartitionNameResponse* result) {
   int attempt = 0; // Used for debug action only.
   CatalogServiceConnection::RpcStatus rpc_status =
-      CatalogServiceConnection::DoRpcWithRetry(env_->catalogd_client_cache(),
+      CatalogServiceConnection::DoRpcWithRetry(
+          env_->catalogd_lightweight_req_client_cache(),
           *ExecEnv::GetInstance()->GetCatalogdAddress().get(),
           &CatalogServiceClientWrapper::GetNullPartitionName, req,
           FLAGS_catalog_client_connection_num_retries,
@@ -449,7 +459,8 @@ Status CatalogOpExecutor::GetLatestCompactions(
     const TGetLatestCompactionsRequest& req, TGetLatestCompactionsResponse* result) {
   int attempt = 0; // Used for debug action only.
   CatalogServiceConnection::RpcStatus rpc_status =
-      CatalogServiceConnection::DoRpcWithRetry(env_->catalogd_client_cache(),
+      CatalogServiceConnection::DoRpcWithRetry(
+          env_->catalogd_lightweight_req_client_cache(),
           *ExecEnv::GetInstance()->GetCatalogdAddress().get(),
           &CatalogServiceClientWrapper::GetLatestCompactions, req,
           FLAGS_catalog_client_connection_num_retries,
