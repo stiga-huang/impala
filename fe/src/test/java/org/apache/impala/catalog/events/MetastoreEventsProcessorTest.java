@@ -319,16 +319,16 @@ public class MetastoreEventsProcessorTest {
     createTable("testNextMetastoreEvents2", false);
     List<NotificationEvent> events =
         MetastoreEventsProcessor.getNextMetastoreEventsInBatches(
-        eventsProcessor_.catalog_, currentEventId, null, 2);
+        eventsProcessor_.catalog_, currentEventId, null, null, 2);
     assertEquals(3, events.size());
     events = MetastoreEventsProcessor.getNextMetastoreEventsInBatches(
-        eventsProcessor_.catalog_, currentEventId+1, null, 10);
+        eventsProcessor_.catalog_, currentEventId+1, null, null, 10);
     assertEquals(2, events.size());
     events = MetastoreEventsProcessor.getNextMetastoreEventsInBatches(
-        eventsProcessor_.catalog_, currentEventId, null, 3);
+        eventsProcessor_.catalog_, currentEventId, null, null, 3);
     assertEquals(3, events.size());
     events = MetastoreEventsProcessor.getNextMetastoreEventsInBatches(
-        eventsProcessor_.catalog_, currentEventId+3, null, 3);
+        eventsProcessor_.catalog_, currentEventId+3, null, null, 3);
     assertEquals(0, events.size());
   }
 
@@ -3541,7 +3541,7 @@ public class MetastoreEventsProcessorTest {
       assertEquals(currentEventId + 1, eventsProcessor_.getCurrentEventId());
       List<NotificationEvent> events =
           MetastoreEventsProcessor.getNextMetastoreEventsInBatches(
-              eventsProcessor_.catalog_, currentEventId, null);
+              eventsProcessor_.catalog_, currentEventId, null, null);
       // Open transaction event is not returned from metastore
       assertEquals(0, events.size());
       MetastoreShim.commitTransaction(client.getHiveClient(), txnId);
@@ -3594,7 +3594,7 @@ public class MetastoreEventsProcessorTest {
     try {
       MetaStoreClientPool badPool = new IncompetentMetastoreClientPool(0, 0);
       catalog_.setMetaStoreClientPool(badPool);
-      MetastoreEventsProcessor.getNextMetastoreEventsInBatches(catalog_, 0, null);
+      MetastoreEventsProcessor.getNextMetastoreEventsInBatches(catalog_, 0, null, null);
     } finally {
       catalog_.setMetaStoreClientPool(origPool);
     }

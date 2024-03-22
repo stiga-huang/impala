@@ -3199,6 +3199,7 @@ public abstract class MetastoreServiceHandler extends AbstractThriftHiveMetastor
     try {
       List<NotificationEvent> events = MetastoreEventsProcessor
           .getNextMetastoreEventsInBatches(catalog_, beforeDropEventId,
+              DropTableEvent.DROP_TABLE_EVENT_TYPE,
               event -> event.getEventType()
                   .equalsIgnoreCase(DropTableEvent.DROP_TABLE_EVENT_TYPE)
                   && catName.equalsIgnoreCase(event.getCatName())
@@ -3295,6 +3296,7 @@ public abstract class MetastoreServiceHandler extends AbstractThriftHiveMetastor
     try {
       List<NotificationEvent> events = MetastoreEventsProcessor
           .getNextMetastoreEventsInBatches(catalog_, beforeDropEventId,
+              MetastoreEvents.DropDatabaseEvent.DROP_DATABASE_EVENT_TYPE,
               event -> event.getEventType()
                   .equalsIgnoreCase(MetastoreEvents.DropDatabaseEvent
                       .DROP_DATABASE_EVENT_TYPE)

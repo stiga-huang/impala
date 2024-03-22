@@ -216,6 +216,7 @@ public class CatalogMetastoreServiceHandler extends MetastoreServiceHandler {
       }
       List<NotificationEvent> events =
           MetastoreEventsProcessor.getNextMetastoreEventsInBatches(catalog_, fromEventId,
+              MetastoreEvents.CreateDatabaseEvent.CREATE_DATABASE_EVENT_TYPE,
               notificationEvent ->
                   MetastoreEvents.CreateDatabaseEvent.CREATE_DATABASE_EVENT_TYPE
                       .equals(notificationEvent.getEventType())
@@ -1332,10 +1333,11 @@ public class CatalogMetastoreServiceHandler extends MetastoreServiceHandler {
       try {
         List<NotificationEvent> events =
             MetastoreEventsProcessor.getNextMetastoreEventsInBatches(catalog_,
-                currentEventId, event -> "ALTER_TABLE".equals(event.getEventType())
-                // the alter table event is generated on the renamed table
-                && newTable.getDbName().equalsIgnoreCase(event.getDbName())
-                && newTable.getTableName().equalsIgnoreCase(event.getTableName()));
+                currentEventId, "ALTER_TABLE",
+                event -> "ALTER_TABLE".equals(event.getEventType())
+                    // the alter table event is generated on the renamed table
+                    && newTable.getDbName().equalsIgnoreCase(event.getDbName())
+                    && newTable.getTableName().equalsIgnoreCase(event.getTableName()));
         Preconditions.checkState(events.size() == 1, String.format("For table %s.%s, "
             + "from event id: %s, expected ALTER_TABLE events size to be 1 but is %s",
             newTable.getDbName(), newTable.getTableName(), currentEventId,
@@ -1420,6 +1422,7 @@ public class CatalogMetastoreServiceHandler extends MetastoreServiceHandler {
       List<NotificationEvent> events =
           MetastoreEventsProcessor
               .getNextMetastoreEventsInBatches(catalog_, fromEventId,
+                  MetastoreEvents.CreateTableEvent.CREATE_TABLE_EVENT_TYPE,
                   event -> MetastoreEvents.CreateTableEvent.CREATE_TABLE_EVENT_TYPE
                       .equals(event.getEventType())
                       && dbName.equalsIgnoreCase(event.getDbName())

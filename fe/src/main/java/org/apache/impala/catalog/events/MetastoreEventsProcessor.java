@@ -277,17 +277,68 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
   private static final long SECOND_IN_NANOS = 1000 * 1000 * 1000L;
 
   // List of event types to skip while fetching notification events from metastore
-  private static final List<String> EVENT_SKIP_LIST = Arrays.asList("OPEN_TXN");
+  private static final List<String> EVENT_SKIP_LIST = Arrays.asList("OPEN_TXN",
+      "UPDATE_PART_COL_STAT_EVENT");
+
+  // Before HIVE-28146 is resolved, we have to specify a complement set for the
+  // type we want. The following strings come from constants in
+  // org.apache.hadoop.hive.metastore.messaging.MessageBuilder. When bumping Hive
+  // versions, the list need to be updated accordingly.
+  private static final List<String> ALL_HMS_EVENT_TYPES = Arrays.asList(
+      "ADD_PARTITION",
+      "ALTER_PARTITION",
+      "DROP_PARTITION",
+      "CREATE_TABLE",
+      "ALTER_TABLE",
+      "DROP_TABLE",
+      "CREATE_DATABASE",
+      "ALTER_DATABASE",
+      "DROP_DATABASE",
+      "INSERT",
+      "CREATE_FUNCTION",
+      "DROP_FUNCTION",
+      "ADD_PRIMARYKEY",
+      "ADD_FOREIGNKEY",
+      "ADD_UNIQUECONSTRAINT",
+      "ADD_NOTNULLCONSTRAINT",
+      "ADD_DEFAULTCONSTRAINT",
+      "ADD_CHECKCONSTRAINT",
+      "DROP_CONSTRAINT",
+      "CREATE_ISCHEMA",
+      "ALTER_ISCHEMA",
+      "DROP_ISCHEMA",
+      "ADD_SCHEMA_VERSION",
+      "ALTER_SCHEMA_VERSION",
+      "DROP_SCHEMA_VERSION",
+      "CREATE_CATALOG",
+      "DROP_CATALOG",
+      "OPEN_TXN",
+      "COMMIT_TXN",
+      "ABORT_TXN",
+      "ALLOC_WRITE_ID_EVENT",
+      "ALTER_CATALOG",
+      "ACID_WRITE_EVENT",
+      "BATCH_ACID_WRITE_EVENT",
+      "UPDATE_TBL_COL_STAT_EVENT",
+      "DELETE_TBL_COL_STAT_EVENT",
+      "UPDATE_PART_COL_STAT_EVENT",
+      "UPDATE_PART_COL_STAT_EVENT_BATCH",
+      "DELETE_PART_COL_STAT_EVENT",
+      "COMMIT_COMPACTION_EVENT",
+      "CREATE_DATACONNECTOR",
+      "ALTER_DATACONNECTOR",
+      "DROP_DATACONNECTOR",
+      "RELOAD");
 
   /**
    * Wrapper around {@link
    * MetastoreEventsProcessor#getNextMetastoreEventsInBatches(CatalogServiceCatalog,
-   * long, NotificationFilter, int)} which passes the default batch size.
+   * long, String, NotificationFilter, int)} which passes the default batch size.
    */
   public static List<NotificationEvent> getNextMetastoreEventsInBatches(
-      CatalogServiceCatalog catalog, long eventId, NotificationFilter filter)
-      throws MetastoreNotificationFetchException {
-    return getNextMetastoreEventsInBatches(catalog, eventId, filter,
+      CatalogServiceCatalog catalog, long eventId, String eventType,
+      NotificationFilter filter) throws MetastoreNotificationFetchException {
+    return getNextMetastoreEventsInBatches(catalog, eventId, eventType, filter,
         EVENTS_BATCH_SIZE_PER_RPC);
   }
 
@@ -307,8 +358,9 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
    */
   @VisibleForTesting
   public static List<NotificationEvent> getNextMetastoreEventsInBatches(
-      CatalogServiceCatalog catalog, long eventId, NotificationFilter filter,
-      int eventsBatchSize) throws MetastoreNotificationFetchException {
+      CatalogServiceCatalog catalog, long eventId, String eventType,
+      NotificationFilter filter, int eventsBatchSize)
+      throws MetastoreNotificationFetchException {
     Preconditions.checkArgument(eventsBatchSize > 0);
     List<NotificationEvent> result = new ArrayList<>();
     try (MetaStoreClient msc = catalog.getMetaStoreClient()) {
@@ -316,6 +368,12 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
           .getEventId();
       if (toEventId <= eventId) return result;
       long currentEventId = eventId;
+      List<String> eventTypeSkipList = null;
+      if (eventType != null) {
+        eventTypeSkipList = new ArrayList<>(ALL_HMS_EVENT_TYPES);
+        eventTypeSkipList.removeIf(s -> s.equalsIgnoreCase(eventType));
+      }
+      int numFilteredEvents = 0;
       while (currentEventId < toEventId) {
         int batchSize = Math
             .min(eventsBatchSize, (int)(toEventId - currentEventId));
@@ -326,17 +384,36 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
         NotificationEventRequest eventRequest = new NotificationEventRequest();
         eventRequest.setMaxEvents(batchSize);
         eventRequest.setLastEvent(currentEventId);
+        if (eventTypeSkipList != null) {
+          eventRequest.setEventTypeSkipList(eventTypeSkipList);
+        }
         NotificationEventResponse notificationEventResponse =
-            MetastoreShim.getNextNotification(msc.getHiveClient(), eventRequest, true);
+            MetastoreShim.getNextNotification(msc.getHiveClient(), eventRequest,
+                eventTypeSkipList);
         if (notificationEventResponse.getEvents().isEmpty()) {
           // Possible to receive empty list due to event skip list in request
+          if (numFilteredEvents > 0) {
+            LOG.warn("Get {} events and filtered out {} locally from {} events start " +
+                    "from id {}",
+                result.size(), numFilteredEvents, toEventId - eventId, eventId + 1);
+          }
           return result;
         }
+
         for (NotificationEvent event : notificationEventResponse.getEvents()) {
           // if no filter is provided we add all the events
-          if (filter == null || filter.accept(event)) result.add(event);
+          if (filter == null || filter.accept(event)) {
+            result.add(event);
+          } else {
+            numFilteredEvents++;
+          }
           currentEventId = event.getEventId();
         }
+      }
+      if (numFilteredEvents > 0) {
+        LOG.warn("Get {} events and filtered out {} locally from {} events start " +
+                "from id {}",
+            result.size(), numFilteredEvents, toEventId - eventId, eventId + 1);
       }
       return result;
     } catch (MetastoreClientInstantiationException | TException e) {
@@ -372,7 +449,7 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
         tbl.getFullName());
     try(ThreadNameAnnotator tna = new ThreadNameAnnotator(annotation)) {
       List<NotificationEvent> events = getNextMetastoreEventsInBatches(catalog,
-          lastEventId, getTableNotificationEventFilter(tbl));
+          lastEventId, /*eventType*/null, getTableNotificationEventFilter(tbl));
 
       if (events.isEmpty()) {
         LOG.debug("table {} synced till event id {}. No new HMS events to process from "
@@ -434,7 +511,7 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
     String annotation = String.format("sync db %s to latest HMS event id", db.getName());
     try(ThreadNameAnnotator tna = new ThreadNameAnnotator(annotation)) {
       List<NotificationEvent> events = getNextMetastoreEventsInBatches(catalog,
-          lastEventId, getDbNotificationEventFilter(db));
+          lastEventId, /*eventType*/null, getDbNotificationEventFilter(db));
 
       if (events.isEmpty()) {
         LOG.debug("db {} already synced till event id: {}, no new hms events from "
@@ -777,7 +854,7 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
     eventRequest.setMaxEvents(1);
     try {
       NotificationEventResponse response = MetastoreShim.getNextNotification(
-          msClient.getHiveClient(), eventRequest, false);
+          msClient.getHiveClient(), eventRequest, null);
       Iterator<NotificationEvent> eventIter = response.getEventsIterator();
       if (!eventIter.hasNext()) {
         LOG.warn("Unable to fetch event {}. It has been cleaned up", eventId);
@@ -906,7 +983,8 @@ public class MetastoreEventsProcessor implements ExternalEventsProcessor {
       eventRequest.setLastEvent(eventId);
       eventRequest.setMaxEvents(batchSize);
       NotificationEventResponse response =
-          MetastoreShim.getNextNotification(msClient.getHiveClient(), eventRequest, true);
+          MetastoreShim.getNextNotification(msClient.getHiveClient(), eventRequest,
+              MetastoreEventsProcessor.getEventSkipList());
       LOG.info(String.format("Received %d events. Start event id : %d",
           response.getEvents().size(), eventId));
       if (filter == null) return response.getEvents();

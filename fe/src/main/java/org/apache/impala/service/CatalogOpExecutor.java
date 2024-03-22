@@ -2128,7 +2128,7 @@ public class CatalogOpExecutor {
           msClient.getHiveClient().createDatabase(db);
           catalogTimeline.markEvent("Created database in Metastore");
           List<NotificationEvent> events = getNextMetastoreEventsIfEnabled(
-              catalogTimeline, eventId,
+              catalogTimeline, eventId, CreateDatabaseEvent.CREATE_DATABASE_EVENT_TYPE,
               notificationEvent ->
                   CreateDatabaseEvent.CREATE_DATABASE_EVENT_TYPE
                       .equals(notificationEvent.getEventType())
@@ -2200,12 +2200,15 @@ public class CatalogOpExecutor {
    * returns an empty list. Also updates the given 'catalogTimeline'
    */
   private List<NotificationEvent> getNextMetastoreEventsIfEnabled(
-      EventSequence catalogTimeline, long eventId, NotificationFilter eventsFilter)
-      throws MetastoreNotificationException {
+      EventSequence catalogTimeline, long eventId, String eventType,
+      NotificationFilter eventsFilter) throws MetastoreNotificationException {
     if (!catalog_.isEventProcessingActive()) return Collections.emptyList();
     List<NotificationEvent> events = MetastoreEventsProcessor
-        .getNextMetastoreEventsInBatches(catalog_, eventId, eventsFilter);
+        .getNextMetastoreEventsInBatches(catalog_, eventId, eventType, eventsFilter);
     catalogTimeline.markEvent(FETCHED_HMS_EVENT_BATCH);
+    if (catalogTimeline != null) {
+      catalogTimeline.markEvent(FETCHED_HMS_EVENT_BATCH);
+    }
     return events;
   }
 
@@ -2746,7 +2749,7 @@ public class CatalogOpExecutor {
             params.cascade);
         catalogTimeline.markEvent("Dropped database in Metastore");
         List<NotificationEvent> events = getNextMetastoreEventsIfEnabled(
-            catalogTimeline, eventId,
+            catalogTimeline, eventId, DropDatabaseEvent.DROP_DATABASE_EVENT_TYPE,
             event -> dbName.equalsIgnoreCase(event.getDbName()) && (
                 DropDatabaseEvent.DROP_DATABASE_EVENT_TYPE.equals(event.getEventType()) ||
                     DropTableEvent.DROP_TABLE_EVENT_TYPE.equals(event.getEventType())));
@@ -3075,6 +3078,7 @@ public class CatalogOpExecutor {
       List<NotificationEvent> events;
       final org.apache.hadoop.hive.metastore.api.Table finalMsTbl = msTbl;
       events = getNextMetastoreEventsIfEnabled(catalogTimeline, eventId,
+          DropTableEvent.DROP_TABLE_EVENT_TYPE,
           event -> DropTableEvent.DROP_TABLE_EVENT_TYPE.equals(event.getEventType())
               && finalMsTbl.getDbName().equalsIgnoreCase(event.getDbName())
               && finalMsTbl.getTableName().equalsIgnoreCase(event.getTableName()));
@@ -3713,11 +3717,12 @@ public class CatalogOpExecutor {
             return false;
           }
           events = getNextMetastoreEventsIfEnabled(catalogTimeline, eventId,
-                  event -> CreateTableEvent.CREATE_TABLE_EVENT_TYPE
-                      .equals(event.getEventType())
-                      && newTable.getDbName().equalsIgnoreCase(event.getDbName())
-                      && newTable.getTableName()
-                      .equalsIgnoreCase(event.getTableName()));
+              CreateTableEvent.CREATE_TABLE_EVENT_TYPE,
+              event -> CreateTableEvent.CREATE_TABLE_EVENT_TYPE
+                  .equals(event.getEventType())
+                  && newTable.getDbName().equalsIgnoreCase(event.getDbName())
+                  && newTable.getTableName()
+                  .equalsIgnoreCase(event.getTableName()));
         }
       }
       // in case of synchronized tables it is possible that Kudu doesn't generate
@@ -3798,7 +3803,7 @@ public class CatalogOpExecutor {
         addSummary(response, "Table has been created.");
         final org.apache.hadoop.hive.metastore.api.Table finalNewTable = newTable;
         List<NotificationEvent> events = getNextMetastoreEventsIfEnabled(
-            catalogTimeline, eventId,
+            catalogTimeline, eventId, CreateTableEvent.CREATE_TABLE_EVENT_TYPE,
             notificationEvent -> CreateTableEvent.CREATE_TABLE_EVENT_TYPE
                 .equals(notificationEvent.getEventType())
                 && finalNewTable.getDbName()
@@ -4014,7 +4019,8 @@ public class CatalogOpExecutor {
             msClient.getHiveClient().createTable(newTable);
             catalogTimeline.markEvent(CREATED_HMS_TABLE);
           }
-          events = getNextMetastoreEventsIfEnabled(catalogTimeline, eventId, event ->
+          events = getNextMetastoreEventsIfEnabled(catalogTimeline, eventId,
+              CreateTableEvent.CREATE_TABLE_EVENT_TYPE, event ->
               CreateTableEvent.CREATE_TABLE_EVENT_TYPE.equals(event.getEventType())
                   && newTable.getDbName().equalsIgnoreCase(event.getDbName())
                   && newTable.getTableName().equalsIgnoreCase(event.getTableName()));
@@ -5118,7 +5124,7 @@ public class CatalogOpExecutor {
             allHmsPartitionsToAdd.size(), tbl.getFullName());
         org.apache.hadoop.hive.metastore.api.Table msTbl = tbl.getMetaStoreTable();
         List<NotificationEvent> events = getNextMetastoreEventsIfEnabled(
-            catalogTimeline, eventId,
+            catalogTimeline, eventId, AddPartitionEvent.ADD_PARTITION_EVENT_TYPE,
             event -> AddPartitionEvent.ADD_PARTITION_EVENT_TYPE
                 .equals(event.getEventType())
                 && msTbl.getDbName().equalsIgnoreCase(event.getDbName())
@@ -5343,12 +5349,12 @@ public class CatalogOpExecutor {
         catalogTimeline.markEvent("Dropped partitions in Metastore");
       }
       List<NotificationEvent> events = getNextMetastoreEventsIfEnabled(
-          catalogTimeline, currentEventId,
+          catalogTimeline, currentEventId, DropPartitionEvent.EVENT_TYPE,
           notificationEvent ->
               tableName.getDb().equalsIgnoreCase(notificationEvent.getDbName())
-                  && tableName.getTbl().equalsIgnoreCase(notificationEvent.getTableName())
-                  && DropPartitionEvent.EVENT_TYPE
-                  .equals(notificationEvent.getEventType()));
+              && tableName.getTbl().equalsIgnoreCase(notificationEvent.getTableName())
+              && DropPartitionEvent.EVENT_TYPE
+              .equals(notificationEvent.getEventType()));
       addDroppedPartitionsFromEvent(
           ((HdfsTable) tbl).getClusteringColNames(), events, droppedPartsFromEvent);
     } catch (TException e) {
@@ -5453,7 +5459,7 @@ public class CatalogOpExecutor {
       }
     }
     List<NotificationEvent> events = null;
-    events = getNextMetastoreEventsIfEnabled(catalogTimeline, eventId,
+    events = getNextMetastoreEventsIfEnabled(catalogTimeline, eventId, "ALTER_TABLE",
         event -> "ALTER_TABLE".equals(event.getEventType())
             // the alter table event is generated on the renamed table
             && msTbl.getDbName().equalsIgnoreCase(event.getDbName())

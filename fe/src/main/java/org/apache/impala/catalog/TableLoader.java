@@ -102,7 +102,8 @@ public class TableLoader {
         // for a table. For tables where eventId is unknown are not created by
         // this catalogd and hence the self-event detection logic does not apply.
         events = MetastoreEventsProcessor.getNextMetastoreEventsInBatches(catalog_,
-            eventId, notificationEvent -> CreateTableEvent.CREATE_TABLE_EVENT_TYPE
+            eventId, CreateTableEvent.CREATE_TABLE_EVENT_TYPE,
+            notificationEvent -> CreateTableEvent.CREATE_TABLE_EVENT_TYPE
                 .equals(notificationEvent.getEventType())
                 && notificationEvent.getDbName().equalsIgnoreCase(db.getName())
                 && notificationEvent.getTableName().equalsIgnoreCase(tblName));
