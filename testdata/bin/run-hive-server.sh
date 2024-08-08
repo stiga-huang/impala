@@ -146,6 +146,14 @@ for jar in $TEZ_HOME/lib/* ; do
   esac
 done
 
+# Add the jar of iceberg-hive-runtime to have HiveIcebergStorageHandler.
+# Only needed by Apache Hive3 since CDP Hive3 has the jar of hive-iceberg-handler in its
+# lib folder.
+if $USE_APACHE_HIVE; then
+  export HADOOP_CLASSPATH="${HADOOP_CLASSPATH}:\
+      $IMPALA_HOME/fe/target/dependency/iceberg-hive-runtime-${IMPALA_ICEBERG_VERSION}.jar"
+fi
+
 # Add kudu-hive.jar to the Hive Metastore classpath, so that Kudu's HMS
 # plugin can be loaded.
 for file in ${IMPALA_KUDU_JAVA_HOME}/*kudu-hive*jar; do
@@ -200,4 +208,8 @@ if [[ ${START_HIVESERVER} -eq 1 && -z $HS2_PID ]]; then
   # Wait for the HiveServer2 service to come up because callers of this script
   # may rely on it being available.
   ${CLUSTER_BIN}/wait-for-hiveserver2.py --transport=${HIVES2_TRANSPORT}
+  if $USE_APACHE_HIVE; then
+    beeline -u jdbc:hive2://localhost:11050 -e "add jar \
+        $IMPALA_HOME/fe/target/dependency/iceberg-hive-runtime-${IMPALA_ICEBERG_VERSION}.jar"
+  fi
 fi
