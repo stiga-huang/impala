@@ -61,7 +61,7 @@ public class FileMetadataLoader {
 
   protected final Path partDir_;
   protected final boolean recursive_;
-  protected final ImmutableMap<String, FileDescriptor> oldFdsByPath_;
+  protected final ImmutableMap<String, byte[]> oldFdsByPath_;
   private final ListMap<TNetworkAddress> hostIndex_;
   @Nullable
   private final ValidWriteIdList writeIds_;
@@ -71,10 +71,11 @@ public class FileMetadataLoader {
   private final HdfsFileFormat fileFormat_;
 
   protected boolean forceRefreshLocations = false;
+  private boolean hasFilesChanged_ = false;
 
-  protected List<FileDescriptor> loadedFds_;
-  private List<FileDescriptor> loadedInsertDeltaFds_;
-  private List<FileDescriptor> loadedDeleteDeltaFds_;
+  protected List<byte[]> loadedFds_;
+  private List<byte[]> loadedInsertDeltaFds_;
+  private List<byte[]> loadedDeleteDeltaFds_;
   protected LoadStats loadStats_;
   protected String debugAction_;
 
@@ -92,7 +93,7 @@ public class FileMetadataLoader {
    * @param fileFormat if non-null and equal to HdfsFileFormat.HUDI_PARQUET,
    *   this loader will filter files based on Hudi's HoodieROTablePathFilter method
    */
-  public FileMetadataLoader(Path partDir, boolean recursive, List<FileDescriptor> oldFds,
+  public FileMetadataLoader(Path partDir, boolean recursive, List<byte[]> oldFds,
       ListMap<TNetworkAddress> hostIndex, @Nullable ValidTxnList validTxnList,
       @Nullable ValidWriteIdList writeIds, @Nullable HdfsFileFormat fileFormat) {
     // Either both validTxnList and writeIds are null, or none of them.
@@ -101,7 +102,7 @@ public class FileMetadataLoader {
     partDir_ = Preconditions.checkNotNull(partDir);
     recursive_ = recursive;
     hostIndex_ = Preconditions.checkNotNull(hostIndex);
-    oldFdsByPath_ = Maps.uniqueIndex(oldFds, FileDescriptor::getPath);
+    oldFdsByPath_ = Maps.uniqueIndex(oldFds, FileDescriptor.GET_PATH_FROM_BYTES);
     writeIds_ = writeIds;
     validTxnList_ = validTxnList;
     fileFormat_ = fileFormat;
@@ -112,7 +113,7 @@ public class FileMetadataLoader {
     TOTAL_TASKS.incrementAndGet();
   }
 
-  public FileMetadataLoader(Path partDir, boolean recursive, List<FileDescriptor> oldFds,
+  public FileMetadataLoader(Path partDir, boolean recursive, List<byte[]> oldFds,
       ListMap<TNetworkAddress> hostIndex, @Nullable ValidTxnList validTxnList,
       @Nullable ValidWriteIdList writeIds) {
     this(partDir, recursive, oldFds, hostIndex, validTxnList, writeIds, null);
@@ -129,17 +130,17 @@ public class FileMetadataLoader {
   /**
    * @return the file descriptors that were loaded after an invocation of load()
    */
-  public List<FileDescriptor> getLoadedFds() {
+  public List<byte[]> getLoadedFds() {
     Preconditions.checkState(loadedFds_ != null,
         "Must have successfully loaded first");
     return loadedFds_;
   }
 
-  public List<FileDescriptor> getLoadedInsertDeltaFds() {
+  public List<byte[]> getLoadedInsertDeltaFds() {
     return loadedInsertDeltaFds_;
   }
 
-  public List<FileDescriptor> getLoadedDeleteDeltaFds() {
+  public List<byte[]> getLoadedDeleteDeltaFds() {
     return loadedDeleteDeltaFds_;
   }
 
@@ -204,6 +205,8 @@ public class FileMetadataLoader {
       if (writeIds_ != null) {
         fileStatuses = AcidUtils.filterFilesForAcidState(fileStatuses, partDir_,
             validTxnList_, writeIds_, loadStats_);
+        loadedInsertDeltaFds_ = new ArrayList<>();
+        loadedDeleteDeltaFds_ = new ArrayList<>();
       }
 
       if (fileFormat_ == HdfsFileFormat.HUDI_PARQUET) {
@@ -220,18 +223,14 @@ public class FileMetadataLoader {
           continue;
         }
 
-        FileDescriptor fd = getFileDescriptor(fs, listWithLocations, numUnknownDiskIds,
+        byte[] encodedFd = getFileDescriptor(fs, listWithLocations, numUnknownDiskIds,
             fileStatus);
-        loadedFds_.add(Preconditions.checkNotNull(fd));
-      }
-      if (writeIds_ != null) {
-        loadedInsertDeltaFds_ = new ArrayList<>();
-        loadedDeleteDeltaFds_ = new ArrayList<>();
-        for (FileDescriptor fd : loadedFds_) {
-          if (AcidUtils.isDeleteDeltaFd(fd)) {
-            loadedDeleteDeltaFds_.add(fd);
+        loadedFds_.add(encodedFd);
+        if (writeIds_ != null) {
+          if (AcidUtils.isDeleteDeltaFile(fileStatus.getPath().getName())) {
+            loadedDeleteDeltaFds_.add(encodedFd);
           } else {
-            loadedInsertDeltaFds_.add(fd);
+            loadedInsertDeltaFds_.add(encodedFd);
           }
         }
       }
@@ -245,19 +244,23 @@ public class FileMetadataLoader {
   /**
    * Return fd created by the given fileStatus or from the cache(oldFdsByPath_).
    */
-  protected FileDescriptor getFileDescriptor(FileSystem fs, boolean listWithLocations,
+  protected byte[] getFileDescriptor(FileSystem fs, boolean listWithLocations,
       Reference<Long> numUnknownDiskIds, FileStatus fileStatus) throws IOException {
     String relPath = FileSystemUtil.relativizePath(fileStatus.getPath(), partDir_);
-    FileDescriptor fd = oldFdsByPath_.get(relPath);
-    if (listWithLocations || forceRefreshLocations || fd == null ||
-        fd.isChanged(fileStatus)) {
-      fd = createFd(fs, fileStatus, relPath, numUnknownDiskIds);
+    byte[] encodedFd = oldFdsByPath_.get(relPath);
+    if (listWithLocations || forceRefreshLocations || encodedFd == null ||
+        FileDescriptor.FROM_BYTES.apply(encodedFd).isChanged(fileStatus)) {
+      // Convert FileDescriptor to byte array to save space in time.
+      encodedFd = FileDescriptor.TO_BYTES.apply(
+          createFd(fs, fileStatus, relPath, numUnknownDiskIds));
+      hasFilesChanged_ = true;
       ++loadStats_.loadedFiles;
     } else {
       ++loadStats_.skippedFiles;
     }
-    return fd;
+    return encodedFd;
   }
+
 
   /**
    * Return located file status list when listWithLocations is true.
@@ -317,15 +320,10 @@ public class FileMetadataLoader {
    * Given a file descriptor list 'oldFds', returns true if the loaded file descriptors
    * are the same as them.
    */
-  public boolean hasFilesChangedCompareTo(List<FileDescriptor> oldFds) {
-    if (oldFds.size() != loadedFds_.size()) return true;
-    ImmutableMap<String, FileDescriptor> oldFdsByRelPath =
-        Maps.uniqueIndex(oldFds, FileDescriptor::getPath);
-    for (FileDescriptor fd : loadedFds_) {
-      FileDescriptor oldFd = oldFdsByRelPath.get(fd.getPath());
-      if (fd.isChanged(oldFd)) return true;
-    }
-    return false;
+  public boolean hasFilesChangedCompareToSnapshot() {
+    if (oldFdsByPath_ == null) return true;
+    if (oldFdsByPath_.size() != loadedFds_.size()) return true;
+    return hasFilesChanged_;
   }
 
   /**

@@ -515,8 +515,8 @@ public class CatalogHmsAPIHelper {
           "Could not load file-metadata for table %s.%s. See catalogd log for details",
           tbl.getDbName(), tbl.getTableName());
       FileMetadata fileMetadata = new FileMetadata();
-      for (FileDescriptor fd : fmLoader.getLoadedFds()) {
-        fileMetadata.addToData(fd.toThrift().file_desc_data);
+      for (byte[] encodedFd : fmLoader.getLoadedFds()) {
+        fileMetadata.addToData(ByteBuffer.wrap(encodedFd));
       }
       tbl.setFileMetadata(fileMetadata);
       tbl.setDictionary(getSerializedNetworkAddress(hostIndex.getList()));
@@ -566,8 +566,8 @@ public class CatalogHmsAPIHelper {
           tblName);
       for (Entry<Partition, FileMetadataLoader> entry : fileMdLoaders.entrySet()) {
         FileMetadata filemetadata = new FileMetadata();
-        for (FileDescriptor fd : entry.getValue().getLoadedFds()) {
-          filemetadata.addToData(fd.toThrift().file_desc_data);
+        for (byte[] encodedFd : entry.getValue().getLoadedFds()) {
+          filemetadata.addToData(ByteBuffer.wrap(encodedFd));
         }
         entry.getKey().setFileMetadata(filemetadata);
       }

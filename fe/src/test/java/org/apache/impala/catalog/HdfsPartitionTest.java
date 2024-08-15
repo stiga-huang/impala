@@ -19,6 +19,7 @@ package org.apache.impala.catalog;
 
 import static org.apache.impala.catalog.HdfsPartition.comparePartitionKeyValues;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -153,10 +154,10 @@ public class HdfsPartitionTest {
     FileMetadataLoader fml = new FileMetadataLoader(p, /* recursive= */false,
         Collections.emptyList(), origIndex, /*validTxnList=*/null, /*writeIds=*/null);
     fml.load();
-    List<FileDescriptor> fileDescriptors = fml.getLoadedFds();
-    assertTrue(!fileDescriptors.isEmpty());
+    List<byte[]> encodedFileDescriptors = fml.getLoadedFds();
+    assertFalse(encodedFileDescriptors.isEmpty());
 
-    FileDescriptor fd = fileDescriptors.get(0);
+    FileDescriptor fd = FileDescriptor.FROM_BYTES.apply(encodedFileDescriptors.get(0));
     // Get the list of locations, using the original host index.
     List<TNetworkAddress> origAddresses = getAllReplicaAddresses(fd, origIndex);
 

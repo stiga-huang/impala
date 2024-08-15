@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import com.google.common.collect.Collections2;
 import org.apache.commons.lang.NotImplementedException;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.metastore.api.ColumnStatisticsObj;
@@ -280,16 +281,19 @@ class DirectMetaProvider implements MetaProvider {
 
   private PartitionMetadataImpl createPartMetadataImpl(Partition p,
       FileMetadataLoader loader) {
-    List<FileDescriptor> deleteDescriptors = loader.getLoadedDeleteDeltaFds();
+    List<byte[]> encodedDeleteDescriptors = loader.getLoadedDeleteDeltaFds();
     ImmutableList<FileDescriptor> fds;
     ImmutableList<FileDescriptor> insertFds;
     ImmutableList<FileDescriptor> deleteFds;
-    if (deleteDescriptors != null && !deleteDescriptors.isEmpty()) {
+    if (encodedDeleteDescriptors != null && !encodedDeleteDescriptors.isEmpty()) {
       fds = ImmutableList.copyOf(Collections.emptyList());
-      insertFds = ImmutableList.copyOf(loader.getLoadedInsertDeltaFds());
-      deleteFds = ImmutableList.copyOf(loader.getLoadedDeleteDeltaFds());
+      insertFds = ImmutableList.copyOf(Collections2.transform(
+          loader.getLoadedInsertDeltaFds(), FileDescriptor.FROM_BYTES));
+      deleteFds = ImmutableList.copyOf(Collections2.transform(
+          loader.getLoadedDeleteDeltaFds(), FileDescriptor.FROM_BYTES));
     } else {
-      fds = ImmutableList.copyOf(loader.getLoadedFds());
+      fds = ImmutableList.copyOf(Collections2.transform(
+          loader.getLoadedFds(), FileDescriptor.FROM_BYTES));
       insertFds = ImmutableList.copyOf(Collections.emptyList());
       deleteFds = ImmutableList.copyOf(Collections.emptyList());
     }

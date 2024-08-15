@@ -395,6 +395,15 @@ public class HdfsPartition extends CatalogObjectImpl
             return arr;
           }
         };
+
+    public static final Function<byte[], String> GET_PATH_FROM_BYTES =
+        input -> FROM_BYTES.apply(input).getPath();
+
+    public static final Function<byte[], String> GET_RELATIVE_PATH_FROM_BYTES =
+        input -> {
+          ByteBuffer bb = ByteBuffer.wrap(input);
+          return FbFileDesc.getRootAsFbFileDesc(bb).relativePath();
+        };
   }
 
   /**
@@ -1180,7 +1189,7 @@ public class HdfsPartition extends CatalogObjectImpl
     return new HdfsPartition.Builder(this)
         .setId(id_)
         .clearFileDescriptors()
-        .setFileDescriptors(fileDescriptors)
+        .setEncodedFileDescriptors(fileDescriptors)
         .build();
   }
 
@@ -1190,7 +1199,7 @@ public class HdfsPartition extends CatalogObjectImpl
     return new HdfsPartition.Builder(this)
         .setId(id_)
         .clearFileDescriptors()
-        .setFileDescriptors(encodedDeleteFileDescriptors_)
+        .setEncodedFileDescriptors(encodedDeleteFileDescriptors_)
         .build();
   }
 
@@ -1551,23 +1560,28 @@ public class HdfsPartition extends CatalogObjectImpl
       return (location_ != null) ? location_.toString() : null;
     }
 
+    public List<byte[]> getEncodedFileDescriptors() {
+      if (encodedFileDescriptors_ == null) return Collections.emptyList();
+      return encodedDeleteFileDescriptors_;
+    }
+
     public List<FileDescriptor> getFileDescriptors() {
       // Set an empty descriptors in case that setFileDescriptors hasn't been called.
-      if (encodedFileDescriptors_ == null) setFileDescriptors(new ArrayList<>());
+      if (encodedFileDescriptors_ == null) setFileDescriptors(Collections.emptyList());
       // Return a lazily transformed list from our internal bytes storage.
       return Lists.transform(encodedFileDescriptors_, FileDescriptor.FROM_BYTES);
     }
 
     public List<FileDescriptor> getInsertFileDescriptors() {
       // Set an empty descriptors in case that setInsertFileDescriptors hasn't been called
-      if (encodedInsertFileDescriptors_ == null) setFileDescriptors(new ArrayList<>());
+      if (encodedInsertFileDescriptors_ == null) setFileDescriptors(Collections.emptyList());
       // Return a lazily transformed list from our internal bytes storage.
       return Lists.transform(encodedInsertFileDescriptors_, FileDescriptor.FROM_BYTES);
     }
 
     public List<FileDescriptor> getDeleteFileDescriptors() {
       // Set an empty descriptors in case that setDeleteFileDescriptors hasn't been called
-      if (encodedDeleteFileDescriptors_ == null) setFileDescriptors(new ArrayList<>());
+      if (encodedDeleteFileDescriptors_ == null) setFileDescriptors(Collections.emptyList());
       // Return a lazily transformed list from our internal bytes storage.
       return Lists.transform(encodedDeleteFileDescriptors_, FileDescriptor.FROM_BYTES);
     }
@@ -1610,8 +1624,18 @@ public class HdfsPartition extends CatalogObjectImpl
       return this;
     }
 
-    public Builder setFileDescriptors(ImmutableList<byte[]> encodedDescriptors) {
-      encodedFileDescriptors_ = encodedDescriptors;
+    public Builder setEncodedFileDescriptors(List<byte[]> encodedDescriptors) {
+      encodedFileDescriptors_ = ImmutableList.copyOf(encodedDescriptors);
+      return this;
+    }
+
+    public Builder setEncodedInsertFileDescriptors(List<byte[]> encodedFds) {
+      encodedInsertFileDescriptors_ = ImmutableList.copyOf(encodedFds);
+      return this;
+    }
+
+    public Builder setEncodedDeleteFileDescriptors(List<byte[]> encodedFds) {
+      encodedDeleteFileDescriptors_ = ImmutableList.copyOf(encodedFds);
       return this;
     }
 

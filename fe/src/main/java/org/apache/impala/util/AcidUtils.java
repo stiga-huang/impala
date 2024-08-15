@@ -408,8 +408,8 @@ public class AcidUtils {
   /**
    * Returns true if 'fd' refers to a delete delta file.
    */
-  public static boolean isDeleteDeltaFd(FileDescriptor fd) {
-    return fd.getPath().startsWith("delete_delta_");
+  public static boolean isDeleteDeltaFile(String path) {
+    return path != null && path.startsWith("delete_delta_");
   }
 
   /**

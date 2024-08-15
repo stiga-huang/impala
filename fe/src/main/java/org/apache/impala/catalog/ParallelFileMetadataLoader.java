@@ -16,6 +16,7 @@
 // under the License.
 package org.apache.impala.catalog;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import java.util.ArrayList;
@@ -107,7 +108,7 @@ public class ParallelFileMetadataLoader {
     // Create a FileMetadataLoader for each path.
     loaders_ = Maps.newHashMap();
     for (Map.Entry<Path, List<HdfsPartition.Builder>> e : partsByPath_.entrySet()) {
-      List<FileDescriptor> oldFds = e.getValue().get(0).getFileDescriptors();
+      List<byte[]> oldFds = e.getValue().get(0).getEncodedFileDescriptors();
       FileMetadataLoader loader;
       HdfsFileFormat format = e.getValue().get(0).getFileFormat();
       if (format.equals(HdfsFileFormat.ICEBERG)) {
@@ -147,18 +148,18 @@ public class ParallelFileMetadataLoader {
       for (HdfsPartition.Builder partBuilder : e.getValue()) {
         // Checks if we can reuse the old file descriptors. Partition builders in the list
         // may have different old file descriptors. We need to verify them one by one.
-        if ((!loader.hasFilesChangedCompareTo(partBuilder.getFileDescriptors()))) {
+        if (!loader.hasFilesChangedCompareToSnapshot()) {
           LOG.trace("Detected files unchanged on partition {}",
               partBuilder.getPartitionName());
           continue;
         }
         partBuilder.clearFileDescriptors();
-        List<FileDescriptor> deleteDescriptors = loader.getLoadedDeleteDeltaFds();
+        List<byte[]> deleteDescriptors = loader.getLoadedDeleteDeltaFds();
         if (deleteDescriptors != null && !deleteDescriptors.isEmpty()) {
-          partBuilder.setInsertFileDescriptors(loader.getLoadedInsertDeltaFds());
-          partBuilder.setDeleteFileDescriptors(loader.getLoadedDeleteDeltaFds());
+          partBuilder.setEncodedInsertFileDescriptors(loader.getLoadedInsertDeltaFds());
+          partBuilder.setEncodedDeleteFileDescriptors(loader.getLoadedDeleteDeltaFds());
         } else {
-          partBuilder.setFileDescriptors(loader.getLoadedFds());
+          partBuilder.setEncodedFileDescriptors(loader.getLoadedFds());
         }
       }
     }

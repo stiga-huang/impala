@@ -59,7 +59,7 @@ public class FileMetadataLoaderTest {
 
     // Test that relative paths are constructed properly.
     ArrayList<String> relPaths = new ArrayList<>(Collections2.transform(
-        fml.getLoadedFds(), FileDescriptor::getRelativePath));
+        fml.getLoadedFds(), FileDescriptor.GET_RELATIVE_PATH_FROM_BYTES));
     Collections.sort(relPaths);
     assertEquals("year=2009/month=1/090101.txt", relPaths.get(0));
     assertEquals("year=2010/month=9/100901.txt", relPaths.get(23));
@@ -74,7 +74,7 @@ public class FileMetadataLoaderTest {
 
     // Touch a file and make sure that we reload locations for that file.
     FileSystem fs = tablePath.getFileSystem(new Configuration());
-    FileDescriptor fd = fml.getLoadedFds().get(0);
+    FileDescriptor fd = FileDescriptor.FROM_BYTES.apply(fml.getLoadedFds().get(0));
     Path filePath = new Path(tablePath, fd.getRelativePath());
     fs.setTimes(filePath, fd.getModificationTime() + 1, /* atime= */-1);
 
@@ -100,7 +100,8 @@ public class FileMetadataLoaderTest {
 
     // Test the latest version was loaded.
     ArrayList<String> relPaths = new ArrayList<>(
-        Collections2.transform(fml.getLoadedFds(), FileDescriptor::getRelativePath));
+        Collections2.transform(fml.getLoadedFds(),
+            FileDescriptor.GET_RELATIVE_PATH_FROM_BYTES));
     Collections.sort(relPaths);
     assertEquals(
         "year=2015/month=03/day=16/5f541af5-ca07-4329-ad8c-40fa9b353f35-0_2-103-391"
@@ -129,7 +130,8 @@ public class FileMetadataLoaderTest {
     assertEquals(20, fml1.getLoadedFds().size());
 
     ArrayList<String> relPaths = new ArrayList<>(
-        Collections2.transform(fml1.getLoadedFds(), FileDescriptor::getRelativePath));
+        Collections2.transform(fml1.getLoadedFds(),
+            FileDescriptor.GET_RELATIVE_PATH_FROM_BYTES));
     Collections.sort(relPaths);
     assertEquals("data/event_time_hour=2020-01-01-08/action=view/" +
         "00001-1-b975a171-0911-47c2-90c8-300f23c28772-00000.parquet", relPaths.get(0));
@@ -144,7 +146,8 @@ public class FileMetadataLoaderTest {
     assertEquals(20, fml2.getLoadedFds().size());
 
     relPaths = new ArrayList<>(
-        Collections2.transform(fml2.getLoadedFds(), FileDescriptor::getRelativePath));
+        Collections2.transform(fml2.getLoadedFds(),
+            FileDescriptor.GET_RELATIVE_PATH_FROM_BYTES));
     Collections.sort(relPaths);
     assertEquals("data/00001-1-5dbd44ad-18bc-40f2-9dd6-aeb2cc23457c-00000.parquet",
         relPaths.get(0));
@@ -171,7 +174,7 @@ public class FileMetadataLoaderTest {
 
     List<String> relPaths = new ArrayList<>(
         Collections2.transform(fml1Refresh.getLoadedFds(),
-        FileDescriptor::getRelativePath));
+            FileDescriptor.GET_RELATIVE_PATH_FROM_BYTES));
     Collections.sort(relPaths);
     assertEquals("data/event_time_hour=2020-01-01-08/action=view/" +
         "00001-1-b975a171-0911-47c2-90c8-300f23c28772-00000.parquet", relPaths.get(0));
@@ -194,7 +197,7 @@ public class FileMetadataLoaderTest {
 
     relPaths = new ArrayList<>(
         Collections2.transform(fml2Refresh.getLoadedFds(),
-            FileDescriptor::getRelativePath));
+            FileDescriptor.GET_RELATIVE_PATH_FROM_BYTES));
     Collections.sort(relPaths);
     assertEquals("data/00001-1-5dbd44ad-18bc-40f2-9dd6-aeb2cc23457c-00000.parquet",
         relPaths.get(0));
@@ -322,7 +325,7 @@ public class FileMetadataLoaderTest {
 
   private IcebergFileMetadataLoader getLoaderForIcebergTable(
       CatalogServiceCatalog catalog, String dbName, String tblName,
-      List<FileDescriptor> oldFds, boolean canDataBeOutsideOfTableLocation)
+      List<byte[]> oldFds, boolean canDataBeOutsideOfTableLocation)
       throws CatalogException {
     return getLoaderForIcebergTable(catalog, dbName, tblName, oldFds,
         canDataBeOutsideOfTableLocation, -1);
@@ -330,7 +333,7 @@ public class FileMetadataLoaderTest {
 
   private IcebergFileMetadataLoader getLoaderForIcebergTable(
       CatalogServiceCatalog catalog, String dbName, String tblName,
-      List<FileDescriptor> oldFds, boolean canDataBeOutsideOfTableLocation,
+      List<byte[]> oldFds, boolean canDataBeOutsideOfTableLocation,
       int newFilesThreshold)
       throws CatalogException {
     ListMap<TNetworkAddress> hostIndex = new ListMap<>();

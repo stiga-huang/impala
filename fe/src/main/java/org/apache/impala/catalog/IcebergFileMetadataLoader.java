@@ -83,7 +83,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
   private final boolean canDataBeOutsideOfTableLocation_;
 
   public IcebergFileMetadataLoader(Path partDir, boolean recursive,
-      List<FileDescriptor> oldFds, ListMap<TNetworkAddress> hostIndex,
+      List<byte[]> oldFds, ListMap<TNetworkAddress> hostIndex,
       ValidTxnList validTxnList, ValidWriteIdList writeIds,
       GroupedContentFiles icebergFiles, boolean canDataBeOutsideOfTableLocation) {
     this(partDir, recursive, oldFds, hostIndex, validTxnList, writeIds,
@@ -92,7 +92,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
   }
 
   public IcebergFileMetadataLoader(Path partDir, boolean recursive,
-      List<FileDescriptor> oldFds, ListMap<TNetworkAddress> hostIndex,
+      List<byte[]> oldFds, ListMap<TNetworkAddress> hostIndex,
       ValidTxnList validTxnList, ValidWriteIdList writeIds,
       GroupedContentFiles icebergFiles, boolean canDataBeOutsideOfTableLocation,
       int newFilesThresholdParam) {
@@ -137,7 +137,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
       loadedFds_ = new ArrayList<>();
       Reference<Long> numUnknownDiskIds = new Reference<>(0L);
       for (ContentFile<?> contentFile : icebergFiles_.getAllContentFiles()) {
-        FileDescriptor fd = getOldFd(contentFile);
+        byte[] fd = getOldFd(contentFile);
         if (fd == null) {
           fd = getFileDescriptor(fs, contentFile, numUnknownDiskIds);
         } else {
@@ -153,7 +153,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
     }
   }
 
-  private FileDescriptor getFileDescriptor(FileSystem fs, ContentFile<?> contentFile,
+  private byte[] getFileDescriptor(FileSystem fs, ContentFile<?> contentFile,
         Reference<Long> numUnknownDiskIds) throws IOException {
     Path fileLoc = FileSystemUtil.createFullyQualifiedPath(
         new Path(contentFile.path().toString()));
@@ -173,7 +173,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
    * tables, and files is not allowed outside the table location.
    */
   @Override
-  protected FileDescriptor getFileDescriptor(FileSystem fs, boolean listWithLocations,
+  protected byte[] getFileDescriptor(FileSystem fs, boolean listWithLocations,
       Reference<Long> numUnknownDiskIds, FileStatus fileStatus) throws IOException {
     String absPath = null;
     String relPath = FileSystemUtil.relativizePathNoThrow(fileStatus.getPath(), partDir_);
@@ -187,10 +187,11 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
     }
 
     String path = Strings.isNullOrEmpty(relPath) ? absPath : relPath;
-    FileDescriptor fd = oldFdsByPath_.get(path);
+    byte[] fd = oldFdsByPath_.get(path);
     if (listWithLocations || forceRefreshLocations || fd == null ||
-        fd.isChanged(fileStatus)) {
-      fd = createFd(fs, fileStatus, relPath, numUnknownDiskIds, absPath);
+        FileDescriptor.FROM_BYTES.apply(fd).isChanged(fileStatus)) {
+      fd = FileDescriptor.TO_BYTES.apply(
+          createFd(fs, fileStatus, relPath, numUnknownDiskIds, absPath));
       ++loadStats_.loadedFiles;
     } else {
       ++loadStats_.skippedFiles;
@@ -313,7 +314,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
     return true;
   }
 
-  FileDescriptor getOldFd(ContentFile<?> contentFile) throws IOException {
+  byte[] getOldFd(ContentFile<?> contentFile) throws IOException {
     Path contentFilePath = FileSystemUtil.createFullyQualifiedPath(
         new Path(contentFile.path().toString()));
     String lookupPath = FileSystemUtil.relativizePathNoThrow(contentFilePath, partDir_);
