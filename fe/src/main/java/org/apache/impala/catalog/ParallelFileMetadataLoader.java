@@ -110,20 +110,24 @@ public class ParallelFileMetadataLoader {
       List<FileDescriptor> oldFds = e.getValue().get(0).getFileDescriptors();
       FileMetadataLoader loader;
       HdfsFileFormat format = e.getValue().get(0).getFileFormat();
+      Path partDir = e.getKey();
       if (format.equals(HdfsFileFormat.ICEBERG)) {
-        loader = new IcebergFileMetadataLoader(e.getKey(), isRecursive, oldFds, hostIndex,
+        loader = new IcebergFileMetadataLoader(partDir, isRecursive, oldFds, hostIndex,
             validTxnList, writeIdList, Preconditions.checkNotNull(icebergFiles),
             canDataBeOutsideOfTableLocation);
       } else {
-        loader = new FileMetadataLoader(e.getKey(), isRecursive, oldFds, hostIndex,
+        loader = new FileMetadataLoader(partDir, isRecursive, oldFds, hostIndex,
             validTxnList, writeIdList, format);
       }
-      // If there is a cached partition mapped to this path, we recompute the block
-      // locations even if the underlying files have not changed.
-      // This is done to keep the cached block metadata up to date.
-      boolean hasCachedPartition = Iterables.any(e.getValue(),
-          HdfsPartition.Builder::isMarkedCached);
-      loader.setForceRefreshBlockLocations(hasCachedPartition);
+      // If there is a cached partition mapped to this path and the underlying FileSystem
+      // supports block locations, we recompute the block locations even if the underlying
+      // files have not changed. This is done to keep the cached block metadata up to
+      // date. Note that partitions can use different storages, so we have to check each
+      // individual partition dir.
+      if (FileSystemUtil.supportsStorageIds(partDir)
+          && Iterables.any(e.getValue(), HdfsPartition.Builder::isMarkedCached)) {
+        loader.setForceRefreshBlockLocations(true);
+      }
       loader.setDebugAction(debugAction);
       loaders_.put(e.getKey(), loader);
     }
@@ -147,7 +151,12 @@ public class ParallelFileMetadataLoader {
       for (HdfsPartition.Builder partBuilder : e.getValue()) {
         // Checks if we can reuse the old file descriptors. Partition builders in the list
         // may have different old file descriptors. We need to verify them one by one.
-        if ((!loader.hasFilesChangedCompareTo(partBuilder.getFileDescriptors()))) {
+        // E.g. two partitions point to the same location and some new files are added
+        // into that path. A previous REFRESH PARTITION command refreshed one partition,
+        // leaving the other partition using stale FDs. Now when running a table level
+        // REFRESH command, the stale partition needs to be updated but the up-to-date
+        // partition can be reused.
+        if (!loader.hasFilesChangedCompareTo(partBuilder.getFileDescriptors())) {
           LOG.trace("Detected files unchanged on partition {}",
               partBuilder.getPartitionName());
           continue;

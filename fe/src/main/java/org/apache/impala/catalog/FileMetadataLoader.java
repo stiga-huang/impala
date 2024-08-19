@@ -21,7 +21,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 
-import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -53,7 +52,6 @@ import javax.annotation.Nullable;
  */
 public class FileMetadataLoader {
   private final static Logger LOG = LoggerFactory.getLogger(FileMetadataLoader.class);
-  private static final Configuration CONF = new Configuration();
 
   // The number of unfinished instances. Incremented in the constructor and decremented
   // at the end of load().
@@ -70,7 +68,8 @@ public class FileMetadataLoader {
   @Nullable
   private final HdfsFileFormat fileFormat_;
 
-  protected boolean forceRefreshLocations = false;
+  protected boolean forceRefreshLocations_ = false;
+  protected boolean hasFilesChanged_ = false;
 
   protected List<FileDescriptor> loadedFds_;
   private List<FileDescriptor> loadedInsertDeltaFds_;
@@ -123,7 +122,7 @@ public class FileMetadataLoader {
    * appear to have changed.
    */
   public void setForceRefreshBlockLocations(boolean refresh) {
-    forceRefreshLocations = refresh;
+    forceRefreshLocations_ = refresh;
   }
 
   /**
@@ -177,7 +176,7 @@ public class FileMetadataLoader {
   private void loadInternal() throws CatalogException, IOException {
     Preconditions.checkState(loadStats_ == null, "already loaded");
     loadStats_ = new LoadStats(partDir_);
-    FileSystem fs = partDir_.getFileSystem(CONF);
+    FileSystem fs = FileSystemUtil.getFileSystemForPath(partDir_);
 
     // If we don't have any prior FDs from which we could re-use old block location info,
     // we'll need to fetch info for every returned file. In this case we can inline
@@ -186,15 +185,17 @@ public class FileMetadataLoader {
     // In the case that we _do_ have existing FDs which we can reuse, we'll optimistically
     // assume that most _can_ be reused, in which case it's faster to _not_ prefetch
     // the locations.
-    boolean listWithLocations = FileSystemUtil.supportsStorageIds(fs) &&
-        (oldFdsByPath_.isEmpty() || forceRefreshLocations);
+    if (!forceRefreshLocations_ && oldFdsByPath_.isEmpty()
+        && FileSystemUtil.supportsStorageIds(fs)) {
+      forceRefreshLocations_ = true;
+    }
 
     String msg = String.format("%s file metadata%s from path %s",
         oldFdsByPath_.isEmpty() ? "Loading" : "Refreshing",
-        listWithLocations ? " with eager location-fetching" : "", partDir_);
+        forceRefreshLocations_ ? " with eager location-fetching" : "", partDir_);
     LOG.trace(msg);
     try (ThreadNameAnnotator tna = new ThreadNameAnnotator(msg)) {
-      List<FileStatus> fileStatuses = getFileStatuses(fs, listWithLocations);
+      List<FileStatus> fileStatuses = getFileStatuses(fs);
 
       loadedFds_ = new ArrayList<>();
       if (fileStatuses == null) return;
@@ -220,8 +221,7 @@ public class FileMetadataLoader {
           continue;
         }
 
-        FileDescriptor fd = getFileDescriptor(fs, listWithLocations, numUnknownDiskIds,
-            fileStatus);
+        FileDescriptor fd = getFileDescriptor(fs, numUnknownDiskIds, fileStatus);
         loadedFds_.add(Preconditions.checkNotNull(fd));
       }
       if (writeIds_ != null) {
@@ -245,13 +245,13 @@ public class FileMetadataLoader {
   /**
    * Return fd created by the given fileStatus or from the cache(oldFdsByPath_).
    */
-  protected FileDescriptor getFileDescriptor(FileSystem fs, boolean listWithLocations,
+  protected FileDescriptor getFileDescriptor(FileSystem fs,
       Reference<Long> numUnknownDiskIds, FileStatus fileStatus) throws IOException {
     String relPath = FileSystemUtil.relativizePath(fileStatus.getPath(), partDir_);
     FileDescriptor fd = oldFdsByPath_.get(relPath);
-    if (listWithLocations || forceRefreshLocations || fd == null ||
-        fd.isChanged(fileStatus)) {
+    if (forceRefreshLocations_ || fd == null || fd.isChanged(fileStatus)) {
       fd = createFd(fs, fileStatus, relPath, numUnknownDiskIds);
+      hasFilesChanged_ = true;
       ++loadStats_.loadedFiles;
     } else {
       ++loadStats_.skippedFiles;
@@ -262,10 +262,9 @@ public class FileMetadataLoader {
   /**
    * Return located file status list when listWithLocations is true.
    */
-  protected List<FileStatus> getFileStatuses(FileSystem fs, boolean listWithLocations)
-      throws IOException {
+  protected List<FileStatus> getFileStatuses(FileSystem fs) throws IOException {
     RemoteIterator<? extends FileStatus> fileStatuses;
-    if (listWithLocations) {
+    if (forceRefreshLocations_) {
       fileStatuses = FileSystemUtil
           .listFiles(fs, partDir_, recursive_, debugAction_);
     } else {
@@ -319,6 +318,7 @@ public class FileMetadataLoader {
    */
   public boolean hasFilesChangedCompareTo(List<FileDescriptor> oldFds) {
     if (oldFds.size() != loadedFds_.size()) return true;
+    if (oldFds == oldFdsByPath_) return hasFilesChanged_;
     ImmutableMap<String, FileDescriptor> oldFdsByRelPath =
         Maps.uniqueIndex(oldFds, FileDescriptor::getPath);
     for (FileDescriptor fd : loadedFds_) {

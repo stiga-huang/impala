@@ -225,8 +225,9 @@ public class HdfsTable extends Table implements FeFsTable {
   // Set to true if any of the partitions have Avro data.
   private boolean hasAvroData_ = false;
 
-  // True if this table's metadata is marked as cached. Does not necessarily mean the
-  // data is cached or that all/any partitions are cached.
+  // True if this table's metadata is marked as HDFS caching enabled. Does not necessarily
+  // mean the data is cached or that all/any partitions are cached.
+  // See HdfsCachingUtil#validateCacheParams() for more details.
   private boolean isMarkedCached_ = false;
 
   // Array of sorted maps storing the association between partition values and

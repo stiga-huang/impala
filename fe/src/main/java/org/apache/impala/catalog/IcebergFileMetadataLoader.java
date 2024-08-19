@@ -30,7 +30,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -40,7 +39,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
-import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -68,8 +66,6 @@ import org.slf4j.LoggerFactory;
 public class IcebergFileMetadataLoader extends FileMetadataLoader {
   private final static Logger LOG = LoggerFactory.getLogger(
       IcebergFileMetadataLoader.class);
-
-  private static final Configuration CONF = new Configuration();
 
   // Default value of 'newFilesThreshold_' if the given parameter or startup flag have
   // invalid value.
@@ -128,7 +124,6 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
    */
   private void reloadWithOldFds() throws IOException {
     loadStats_ = new LoadStats(partDir_);
-    FileSystem fs = partDir_.getFileSystem(CONF);
 
     String msg = String.format("Refreshing Iceberg file metadata from path %s " +
         "while reusing old file descriptors", partDir_);
@@ -139,7 +134,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
       for (ContentFile<?> contentFile : icebergFiles_.getAllContentFiles()) {
         FileDescriptor fd = getOldFd(contentFile);
         if (fd == null) {
-          fd = getFileDescriptor(fs, contentFile, numUnknownDiskIds);
+          fd = getFileDescriptor(contentFile, numUnknownDiskIds);
         } else {
           ++loadStats_.skippedFiles;
         }
@@ -153,19 +148,19 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
     }
   }
 
-  private FileDescriptor getFileDescriptor(FileSystem fs, ContentFile<?> contentFile,
+  private FileDescriptor getFileDescriptor(ContentFile<?> contentFile,
         Reference<Long> numUnknownDiskIds) throws IOException {
     Path fileLoc = FileSystemUtil.createFullyQualifiedPath(
         new Path(contentFile.path().toString()));
+    FileSystem fsForPath = FileSystemUtil.getFileSystemForPath(fileLoc);
     FileStatus stat;
-    if (FileSystemUtil.supportsStorageIds(fs)) {
-      stat = Utils.createLocatedFileStatus(fileLoc, fs);
+    if (FileSystemUtil.supportsStorageIds(fsForPath)) {
+      stat = Utils.createLocatedFileStatus(fileLoc, fsForPath);
     } else {
       // For OSS service (e.g. S3A, COS, OSS, etc), we create FileStatus ourselves.
       stat = Utils.createFileStatus(contentFile, fileLoc);
     }
-    return getFileDescriptor(fs, FileSystemUtil.supportsStorageIds(fs),
-        numUnknownDiskIds, stat);
+    return getFileDescriptor(fsForPath, numUnknownDiskIds, stat);
   }
 
   /**
@@ -173,7 +168,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
    * tables, and files is not allowed outside the table location.
    */
   @Override
-  protected FileDescriptor getFileDescriptor(FileSystem fs, boolean listWithLocations,
+  protected FileDescriptor getFileDescriptor(FileSystem fs,
       Reference<Long> numUnknownDiskIds, FileStatus fileStatus) throws IOException {
     String absPath = null;
     String relPath = FileSystemUtil.relativizePathNoThrow(fileStatus.getPath(), partDir_);
@@ -188,9 +183,9 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
 
     String path = Strings.isNullOrEmpty(relPath) ? absPath : relPath;
     FileDescriptor fd = oldFdsByPath_.get(path);
-    if (listWithLocations || forceRefreshLocations || fd == null ||
-        fd.isChanged(fileStatus)) {
+    if (forceRefreshLocations_ || fd == null || fd.isChanged(fileStatus)) {
       fd = createFd(fs, fileStatus, relPath, numUnknownDiskIds, absPath);
+      hasFilesChanged_ = true;
       ++loadStats_.loadedFiles;
     } else {
       ++loadStats_.skippedFiles;
@@ -202,14 +197,13 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
    * Return file status list based on the data and delete files of the Iceberg tables.
    */
   @Override
-  protected List<FileStatus> getFileStatuses(FileSystem fs, boolean listWithLocations)
-      throws IOException {
+  protected List<FileStatus> getFileStatuses(FileSystem fs) throws IOException {
     if (icebergFiles_.isEmpty()) return null;
     // For the FSs in 'FileSystemUtil#SCHEME_SUPPORT_STORAGE_IDS' (e.g. HDFS, Ozone,
     // Alluxio, etc.) we ensure the file with block location information, so we're going
     // to get the block information through 'FileSystemUtil.listFiles'.
     Map<Path, FileStatus> nameToFileStatus = Collections.emptyMap();
-    if (listWithLocations) nameToFileStatus = parallelListing(fs);
+    if (FileSystemUtil.supportsStorageIds(fs)) nameToFileStatus = parallelListing(fs);
     List<FileStatus> stats = Lists.newLinkedList();
     for (ContentFile<?> contentFile : icebergFiles_.getAllContentFiles()) {
       Path path = FileSystemUtil.createFullyQualifiedPath(
@@ -288,7 +282,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
   @VisibleForTesting
   boolean shouldReuseOldFds() throws IOException {
     if (oldFdsByPath_ == null || oldFdsByPath_.isEmpty()) return false;
-    if (forceRefreshLocations) return false;
+    if (forceRefreshLocations_) return false;
 
     int oldFdsSize = oldFdsByPath_.size();
     int iceContentFilesSize = icebergFiles_.size();

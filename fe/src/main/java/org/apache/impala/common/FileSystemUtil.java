@@ -527,6 +527,10 @@ public class FileSystemUtil {
     return SCHEME_SUPPORT_STORAGE_IDS.contains(fs.getScheme());
   }
 
+  public static boolean supportsStorageIds(Path path) {
+    return SCHEME_SUPPORT_STORAGE_IDS.contains(path.toUri().getScheme());
+  }
+
   /**
    * Returns true if the FileSystem supports recursive listFiles (instead of using the
    * base FileSystem.listFiles()). Currently only S3.
