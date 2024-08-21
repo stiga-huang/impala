@@ -689,7 +689,7 @@ fi
 export HIVE_METASTORE_THRIFT_DIR=${HIVE_METASTORE_THRIFT_DIR_OVERRIDE:-\
 "$HIVE_SRC_DIR/standalone-metastore/src/main/thrift"}
 if $USE_APACHE_TEZ; then
-  export TEZ_HOME="$APACHE_COMPONENTS_HOME/tez-${IMPALA_TEZ_VERSION}"
+  export TEZ_HOME="$APACHE_COMPONENTS_HOME/apache-tez-${IMPALA_TEZ_VERSION}-bin"
 else
   export TEZ_HOME="$CDP_COMPONENTS_HOME/tez-${IMPALA_TEZ_VERSION}-minimal"
 fi
