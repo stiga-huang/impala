@@ -3370,7 +3370,8 @@ public class Analyzer {
   }
 
   public void setAssignedConjuncts(Set<ExprId> assigned) {
-    globalState_.assignedConjuncts = Sets.newHashSet(assigned);
+    globalState_.assignedConjuncts.clear();
+    globalState_.assignedConjuncts.addAll(assigned);
   }
 
   /**
