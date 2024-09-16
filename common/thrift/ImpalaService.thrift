@@ -1088,6 +1088,9 @@ enum TImpalaQueryOptions {
   // NONE             : No fallback planner to be used.
   // default is ORIGINAL
   FALLBACK_PLANNER = 200
+
+  // When true, try to use historical execution stats in query planning.
+  ENABLE_HBO = 201
 }
 
 // The summary of a DML statement.

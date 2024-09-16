@@ -189,6 +189,8 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
 
   protected TupleCacheInfo tupleCacheInfo_;
 
+  protected boolean hboHit_ = false;
+
   protected PlanNode(PlanNodeId id, List<TupleId> tupleIds, String displayName) {
     this(id, displayName);
     tupleIds_.addAll(tupleIds);
@@ -420,6 +422,9 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
             .append(")");
       } else {
         expBuilder.append(PrintUtils.printEstCardinality(cardinality_));
+      }
+      if (hboHit_) {
+        expBuilder.append(" (from HBO)");
       }
       if (Planner.isProcessingCostAvailable(queryOptions)) {
         // Show processing cost total.

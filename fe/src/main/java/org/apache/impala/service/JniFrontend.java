@@ -85,6 +85,7 @@ import org.apache.impala.thrift.TQueryCompleteContext;
 import org.apache.impala.thrift.TQueryCtx;
 import org.apache.impala.thrift.TResultSet;
 import org.apache.impala.thrift.TSessionState;
+import org.apache.impala.thrift.THistoryStatsUpdate;
 import org.apache.impala.thrift.TShowFilesParams;
 import org.apache.impala.thrift.TShowGrantPrincipalParams;
 import org.apache.impala.thrift.TCatalogOpRequest;
@@ -936,6 +937,13 @@ public class JniFrontend {
     TUniqueId queryId = new TUniqueId();
     JniUtil.deserializeThrift(protocolFactory_, queryId, thriftQueryId);
     this.frontend_.commitKuduTransaction(queryId);
+  }
+
+  public void storeExecStats(byte[] byteArray) throws ImpalaException {
+    THistoryStatsUpdate stats = new THistoryStatsUpdate();
+    JniUtil.deserializeThrift(protocolFactory_, stats, byteArray);
+    LOG.info("execution stats from BE: {}", stats);
+    HistoryStats.INSTANCE.writeStats(stats);
   }
 
   /**

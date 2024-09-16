@@ -23,6 +23,7 @@
 #include "common/status.h"
 #include "gen-cpp/CatalogService_types.h"
 #include "gen-cpp/Frontend_types.h"
+#include "gen-cpp/HBO_types.h"
 #include "gen-cpp/ImpalaHiveServer2Service.h"
 #include "gen-cpp/ImpalaService.h"
 #include "gen-cpp/LineageGraph_types.h"
@@ -265,6 +266,8 @@ class Frontend {
   /// Returns a CSV list of Impala keywords excluding the provided ODBC-reserved CSV.
   Status GetNonOdbcKeywords(const std::string& odbc_keywords_csv, std::string* response);
 
+  Status StoreExecStats(const THistoryStatsUpdate& stats);
+
  private:
   jclass fe_class_; // org.apache.impala.service.JniFrontend class
   jobject fe_;  // instance of org.apache.impala.service.JniFrontend
@@ -313,6 +316,7 @@ class Frontend {
   jmethodID hive_legacy_timezone_convert_; // JniFrontend.hiveLegacyTimezoneConvert()
   jmethodID cancel_exec_request_id_; // JniFrontend.cancelExecRequest()
   jmethodID get_non_odbc_keywords_id_; // JniFrontend.getNonOdbcKeywords(String)
+  jmethodID store_exec_stats_; // JniFrontend.storeExecStats()
 
   // Only used for testing.
   jmethodID build_test_descriptor_table_id_; // JniFrontend.buildTestDescriptorTable()

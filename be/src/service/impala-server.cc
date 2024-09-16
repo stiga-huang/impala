@@ -1453,6 +1453,22 @@ Status ImpalaServer::ExecuteInternal(const TQueryCtx& query_ctx,
   return Status::OK();
 }
 
+vector<TPlanNode> ImpalaServer::GetScanNodes(const TExecRequest& exec_request) {
+  vector<TPlanFragment> fragments;
+  vector<TPlanNode> scan_nodes;
+  for (const TPlanExecInfo& plan_exec_info: exec_request.query_exec_request.plan_exec_info) {
+    for (const TPlanFragment& fragment: plan_exec_info.fragments) {
+      for (const TPlanNode& node: fragment.plan.nodes) {
+        if (node.node_type == TPlanNodeType::HDFS_SCAN_NODE) {
+          scan_nodes.push_back(node);
+        }
+      }
+    }
+  }
+  VLOG_QUERY << "scan_nodes count: " << scan_nodes.size();
+  return scan_nodes;
+}
+
 void ImpalaServer::PrepareQueryContext(TQueryCtx* query_ctx) {
   PrepareQueryContext(exec_env_->configured_backend_address().hostname,
       exec_env_->krpc_address(), query_ctx);
@@ -1639,6 +1655,104 @@ void ImpalaServer::UpdateExecSummary(const QueryHandle& query_handle) const {
   query_handle->summary_profile()->AddInfoStringRedacted("Errors", join(errors, "\n"));
 }
 
+Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
+  //const RuntimeProfile* profile = query_handle->profile();
+  const TExecRequest& exec_req = query_handle->exec_request();
+  shared_ptr<QueryStateRecord> query_record = nullptr;
+  TExecSummary summary;
+  if (query_handle->GetCoordinator() == nullptr) {
+    LOG(ERROR) << "ExecSummary not found for HBO!";
+    return Status("ExecSummary not found for HBO");
+  }
+
+  query_handle->GetCoordinator()->GetTExecSummary(&summary);
+  map<TPlanNodeId, TPlanNodeExecSummary> exec_summaries;
+  for (const TPlanNodeExecSummary& s: summary.nodes) {
+    exec_summaries[s.node_id] = s;
+  }
+
+  vector<string> table_catalog_version_rows;
+  split(table_catalog_version_rows,
+      *(query_handle->frontend_profile()->GetInfoString("Original Table Versions")),
+      is_any_of("\n"));
+  unordered_map<string, int64_t> table_catalog_version;
+  for (auto&& row : table_catalog_version_rows) {
+    vector<string> fields;
+    split(fields, row, is_any_of(","));
+    table_catalog_version[fields[0]] = std::stoll(fields[1]);
+  }
+
+  set<int64_t> effective_filter_ids;
+  vector<RuntimeProfileBase*> prof_stack;
+  std::function<void(RuntimeProfileBase*)> process_exec_profile = [
+      &process_exec_profile, &effective_filter_ids, &prof_stack]
+      (RuntimeProfileBase* profile) {
+    prof_stack.push_back(profile);
+    if (const string& rf = prof_stack.back()->name();
+        boost::algorithm::istarts_with(rf, "Filter")) {
+      vector<string> fields;
+      split(fields, rf, is_any_of(" "));
+      if (prof_stack.back()->GetCounter("Files rejected")->value() > 0
+          || prof_stack.back()->GetCounter("RowGroups rejected")->value() > 0
+          || prof_stack.back()->GetCounter("Rows rejected")->value() > 0
+          || prof_stack.back()->GetCounter("Splits rejected")->value() > 0) {
+        effective_filter_ids.insert(std::stoi(fields[1]));
+      }
+    }
+    // Recursively walk down through all child nodes.
+    vector<RuntimeProfileBase*> children;
+    profile->GetChildren(&children);
+    for (const auto& child : children) {
+      process_exec_profile(child);
+    }
+    prof_stack.pop_back();
+  };
+  process_exec_profile(query_handle->GetCoordinator()->query_profile());
+  for (int64_t id : effective_filter_ids) {
+    VLOG_QUERY << "<<<HBO>>>Filter " << id << " rejected some rows";
+  }
+
+  THistoryStatsUpdate history_stats;
+  for (TPlanNode p : GetScanNodes(exec_req)) {
+    // Skip nodes if runtime filters have filtered some rows. Those rows are ignored
+    // since they can't pass later join nodes. Currently don't have context to track
+    // this. On the other hand, the output cardinality depends on when the runtime
+    // filters arrive, which is unreliable.
+    if (p.__isset.runtime_filters) {
+      bool has_effective_filters = false;
+      for (const TRuntimeFilterDesc& f : p.runtime_filters) {
+        if (effective_filter_ids.find(f.filter_id) != effective_filter_ids.end()) {
+          VLOG_QUERY << "Filter " << f.filter_id << " rejected some rows on ScanNode "
+                     << p.node_id << " " << p.label_detail;
+          has_effective_filters = true;
+          break;
+        }
+      }
+      if (has_effective_filters) continue;
+    }
+
+    VLOG_QUERY << "<<<HBO>>>conjuncts_string: " << p.conjuncts_string;
+    int64_t cardinality = 0;
+    for (const TExecStats& stat: exec_summaries[p.node_id].exec_stats) {
+      cardinality += stat.cardinality;
+    }
+    // TODO: store the cumulative TExecStats instead of just cardinality
+    TScanNodeCardinality stats;
+    // remove alias in label_detail
+    stats.table_name = p.label_detail.substr(0, p.label_detail.find(" "));
+    stats.catalog_version = table_catalog_version.at(stats.table_name);
+    stats.num_rows = cardinality;
+    stats.conjuncts_string = p.conjuncts_string;
+    stats.__isset.conjuncts_string = true;
+    VLOG_QUERY << "<<<HBO>>>" << stats.table_name << "|" << stats.catalog_version << "|"
+               << stats.num_rows;
+    history_stats.scan_node_cards.push_back(stats);
+    history_stats.__isset.scan_node_cards = true;
+  }
+  VLOG_QUERY << "Invoke JNI StoreExecStats";
+  return exec_env_->frontend()->StoreExecStats(history_stats);
+}
+
 Status ImpalaServer::UnregisterQuery(
     const TUniqueId& query_id, const Status* cause, bool interrupted) {
   VLOG_QUERY << "UnregisterQuery(): query_id=" << PrintId(query_id);
@@ -1745,6 +1859,7 @@ void ImpalaServer::CloseClientRequestState(const QueryHandle& query_handle) {
 
   if (query_handle->GetCoordinator() != nullptr) {
     UpdateExecSummary(query_handle);
+    discard_result(StoreExecutionStats(query_handle));
   }
 
   if (query_handle->schedule() != nullptr) {

@@ -867,7 +867,11 @@ struct TPlanNode {
   28: optional TTupleCacheNode tuple_cache_node
 
   29: optional TSystemTableScanNode system_table_scan_node
+
   31: optional TPaimonScanNode paimon_table_scan_node
+
+  // Used in HBO only
+  32: optional string conjuncts_string
 }
 
 // A flattened representation of a tree of PlanNodes, obtained by depth-first
