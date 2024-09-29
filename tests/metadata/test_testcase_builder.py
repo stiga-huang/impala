@@ -44,16 +44,31 @@ class TestTestcaseBuilder(ImpalaTestSuite):
     """Verify the basic usage. Use a unique database so the import won't impact the
     metadata used by other tests"""
     self.client.execute(
-        "create table {0}.alltypes like functional.alltypes".format(unique_database))
+        "create table {0}.alltypes partitioned by (`year`, `month`) as "
+        "select * from functional.alltypes".format(unique_database))
     self.client.execute(
         "create view {0}.alltypes_view as select * from {0}.alltypes"
         .format(unique_database))
     # Test SELECT on a view. The view will be expanded and the underlying table will also
     # be exported.
-    self._test_export_and_import(1, 1, 1,
-        "select count(*) from {0}.alltypes_view".format(unique_database))
+    self._test_export_and_import(
+        1, 1, 1,
+        "select count(*) from {0}.alltypes_view".format(unique_database),
+        [unique_database + ".alltypes"], [unique_database + ".alltypes_view"])
 
-  def _test_export_and_import(self, num_dbs, num_tbls, num_views, query):
+    res = self.execute_query(
+        "show partitions {0}.alltypes".format(unique_database),
+        {"PLANNER_TESTCASE_MODE": True})
+    # 24 partitions with a Total line
+    assert len(res.data) == 25
+
+    res = self.execute_query(
+        "show files in {0}.alltypes".format(unique_database),
+        {"PLANNER_TESTCASE_MODE": True})
+    # Each partition shoule have exactly one file
+    assert len(res.data) == 24
+
+  def _test_export_and_import(self, num_dbs, num_tbls, num_views, query, tbls=(), views=()):
     tmp_path = get_fs_path("/tmp")
     # Make sure /tmp dir exists
     if not self.filesystem_client.exists(tmp_path):
@@ -69,6 +84,12 @@ class TestTestcaseBuilder(ImpalaTestSuite):
     hdfs_path = testcase_path[index:-1]
     assert self.filesystem_client.exists(hdfs_path), \
         "File not generated {0}".format(hdfs_path)
+
+    # Remove the original tables and views to make sure we use the imported ones.
+    for t in tbls:
+      self.execute_query_expect_success(self.client, "drop table if exists " + t)
+    for v in views:
+      self.execute_query_expect_success(self.client, "drop view if exists " + v)
 
     try:
       # Test load testcase works
