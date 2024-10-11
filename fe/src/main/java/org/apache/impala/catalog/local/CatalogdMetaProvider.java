@@ -444,6 +444,7 @@ public class CatalogdMetaProvider implements MetaProvider {
   private TGetPartialCatalogObjectResponse sendRequest(
       TGetPartialCatalogObjectRequest req)
       throws TException {
+    LOG.info("sendRequest {}", req, new Throwable());
     TGetPartialCatalogObjectResponse resp;
     byte[] ret = null;
     Stopwatch sw = Stopwatch.createStarted();
