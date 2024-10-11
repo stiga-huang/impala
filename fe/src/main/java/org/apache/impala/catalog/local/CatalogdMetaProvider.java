@@ -948,6 +948,9 @@ public class CatalogdMetaProvider implements MetaProvider {
                   p.isSetId(), req, "response missing partition IDs for partition %s", p);
               partitionRefs.add(new PartitionRefImpl(p));
             }
+            if (((TableMetaRefImpl) table).tableName_.equals("alltypes") && ((TableMetaRefImpl) table).dbName_.startsWith("test_query_with_tbls")) {
+              LOG.info("Partition list of target table has {} items", resp.table_info.partitions.size());
+            }
             return partitionRefs;
           }
         });
@@ -1001,7 +1004,7 @@ public class CatalogdMetaProvider implements MetaProvider {
     }
     sw.stop();
     addStatsToProfile(PARTITIONS_STATS_CATEGORY, numHits, numMisses, sw);
-    LOG.trace("Request for partitions of {}: hit {}/{}", table, numHits,
+    LOG.info("Request for partitions of {}: hit {}/{}", table, numHits,
         partitionRefs.size());
 
     // Convert the returned map to be by-name instead of by-ref.
