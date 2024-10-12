@@ -566,7 +566,7 @@ public abstract class Table extends CatalogObjectImpl implements FeTable {
    * Factory method that creates a new Table from its Thrift representation.
    * Determines the type of table to create based on the Thrift table provided.
    */
-  public static Table fromThrift(Db parentDb, TTable thriftTable)
+  public static Table fromThrift(Db parentDb, TTable thriftTable, boolean loadedInImpalad)
       throws TableLoadingException {
     CatalogInterners.internFieldsInPlace(thriftTable);
     Table newTable;
@@ -588,7 +588,7 @@ public abstract class Table extends CatalogObjectImpl implements FeTable {
               tblType, MetadataOp.getTableComment(thriftTable.getMetastore_table()));
     }
     try {
-      newTable.loadFromThrift(thriftTable);
+      newTable.loadFromThrift(thriftTable, loadedInImpalad);
     } catch (IcebergTableLoadingException e) {
       LOG.warn(String.format("The table %s in database %s could not be loaded.",
                    thriftTable.getTbl_name(), parentDb.getName()),
@@ -605,8 +605,9 @@ public abstract class Table extends CatalogObjectImpl implements FeTable {
     return c.getPosition() < numClusteringCols_;
   }
 
-  protected void loadFromThrift(TTable thriftTable) throws TableLoadingException {
-    List<TColumn> columns = new ArrayList<TColumn>();
+  protected void loadFromThrift(TTable thriftTable, boolean loadedInImpalad)
+      throws TableLoadingException {
+    List<TColumn> columns = new ArrayList<>();
     columns.addAll(thriftTable.getClustering_columns());
     columns.addAll(thriftTable.getColumns());
 
@@ -638,7 +639,7 @@ public abstract class Table extends CatalogObjectImpl implements FeTable {
 
     storageMetadataLoadTime_ = thriftTable.getStorage_metadata_load_time_ns();
 
-    storedInImpaladCatalogCache_ = true;
+    storedInImpaladCatalogCache_ = loadedInImpalad;
   }
 
   /**

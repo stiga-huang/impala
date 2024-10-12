@@ -228,8 +228,9 @@ public class DataSourceTable extends Table implements FeDataSourceTable {
   }
 
   @Override
-  protected void loadFromThrift(TTable thriftTable) throws TableLoadingException {
-    super.loadFromThrift(thriftTable);
+  protected void loadFromThrift(TTable thriftTable, boolean loadedInImpalad)
+      throws TableLoadingException {
+    super.loadFromThrift(thriftTable, loadedInImpalad);
     TDataSourceTable dataSourceTable = thriftTable.getData_source_table();
     initString_ = dataSourceTable.getInit_string();
     dataSource_ = dataSourceTable.getData_source();

@@ -138,8 +138,9 @@ public class HBaseTable extends Table implements FeHBaseTable {
   }
 
   @Override
-  protected void loadFromThrift(TTable table) throws TableLoadingException {
-    super.loadFromThrift(table);
+  protected void loadFromThrift(TTable table, boolean loadedInImpalad)
+      throws TableLoadingException {
+    super.loadFromThrift(table, loadedInImpalad);
     try {
       hbaseTableName_ = Util.getHBaseTableName(getMetaStoreTable());
       columnFamilies_ = null;

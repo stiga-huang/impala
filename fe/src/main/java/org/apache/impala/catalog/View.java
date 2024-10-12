@@ -114,8 +114,9 @@ public class View extends Table implements FeView {
   }
 
   @Override
-  protected void loadFromThrift(TTable t) throws TableLoadingException {
-    super.loadFromThrift(t);
+  protected void loadFromThrift(TTable t, boolean loadedInImpalad)
+      throws TableLoadingException {
+    super.loadFromThrift(t, loadedInImpalad);
     queryStmt_ = parseViewDef(this);
   }
 

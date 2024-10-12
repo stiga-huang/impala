@@ -155,7 +155,7 @@ public class IncompleteTable extends Table implements FeIncompleteTable {
   }
 
   @Override
-  protected void loadFromThrift(TTable thriftTable) {
+  protected void loadFromThrift(TTable thriftTable, boolean loadedInImpalad) {
     if (thriftTable.isSetTbl_comment()) {
       comment_ = thriftTable.getTbl_comment();
       LOG.trace("Loaded comment from thriftTable of {}: {}", getFullName(), comment_);

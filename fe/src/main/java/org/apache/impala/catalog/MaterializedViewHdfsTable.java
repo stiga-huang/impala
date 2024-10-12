@@ -95,8 +95,9 @@ public class MaterializedViewHdfsTable extends HdfsTable {
   }
 
   @Override
-  protected void loadFromThrift(TTable thriftTable) throws TableLoadingException {
-    super.loadFromThrift(thriftTable);
+  protected void loadFromThrift(TTable thriftTable, boolean loadedInImpalad)
+      throws TableLoadingException {
+    super.loadFromThrift(thriftTable, loadedInImpalad);
     initQueryStmt();
   }
 

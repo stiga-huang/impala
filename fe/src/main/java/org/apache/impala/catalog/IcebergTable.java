@@ -538,8 +538,9 @@ public class IcebergTable extends Table implements FeIcebergTable {
   }
 
   @Override
-  protected void loadFromThrift(TTable thriftTable) throws TableLoadingException {
-    super.loadFromThrift(thriftTable);
+  protected void loadFromThrift(TTable thriftTable, boolean loadedInImpalad)
+      throws TableLoadingException {
+    super.loadFromThrift(thriftTable, loadedInImpalad);
     TIcebergTable ticeberg = thriftTable.getIceberg_table();
     icebergTableLocation_ = ticeberg.getTable_location();
     icebergParquetCompressionCodec_ = ticeberg.getParquet_compression_codec();
@@ -556,7 +557,7 @@ public class IcebergTable extends Table implements FeIcebergTable {
     icebergApiTable_ = IcebergUtil.loadTable(this);
     fileStore_ = IcebergContentFileStore.fromThrift(
         ticeberg.getContent_files(), null, null);
-    hdfsTable_.loadFromThrift(thriftTable);
+    hdfsTable_.loadFromThrift(thriftTable, true);
     partitionStats_ = ticeberg.getPartition_stats();
   }
 

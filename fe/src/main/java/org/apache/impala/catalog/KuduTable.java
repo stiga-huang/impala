@@ -34,7 +34,6 @@ import org.apache.impala.analysis.KuduPartitionParam;
 import org.apache.impala.common.ImpalaRuntimeException;
 import org.apache.impala.service.BackendConfig;
 import org.apache.impala.thrift.TCatalogObjectType;
-import org.apache.impala.thrift.TColumn;
 import org.apache.impala.thrift.TKuduPartitionByHashParam;
 import org.apache.impala.thrift.TKuduPartitionByRangeParam;
 import org.apache.impala.thrift.TKuduPartitionParam;
@@ -468,8 +467,9 @@ public class KuduTable extends Table implements FeKuduTable {
   }
 
   @Override
-  protected void loadFromThrift(TTable thriftTable) throws TableLoadingException {
-    super.loadFromThrift(thriftTable);
+  protected void loadFromThrift(TTable thriftTable, boolean loadedInImpalad)
+      throws TableLoadingException {
+    super.loadFromThrift(thriftTable, loadedInImpalad);
     TKuduTable tkudu = thriftTable.getKudu_table();
     kuduTableName_ = tkudu.getTable_name();
     kuduMasters_ = Joiner.on(',').join(tkudu.getMaster_addresses());

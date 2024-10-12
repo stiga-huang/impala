@@ -85,12 +85,6 @@ class TestTestcaseBuilder(ImpalaTestSuite):
     assert self.filesystem_client.exists(hdfs_path), \
         "File not generated {0}".format(hdfs_path)
 
-    # Remove the original tables and views to make sure we use the imported ones.
-    for t in tbls:
-      self.execute_query_expect_success(self.client, "drop table if exists " + t)
-    for v in views:
-      self.execute_query_expect_success(self.client, "drop view if exists " + v)
-
     try:
       # Test load testcase works
       testcase_load_query = "COPY TESTCASE FROM {0}".format(testcase_path)

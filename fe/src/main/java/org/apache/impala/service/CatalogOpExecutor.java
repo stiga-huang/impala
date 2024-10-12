@@ -147,7 +147,6 @@ import org.apache.impala.catalog.events.MetastoreEvents.DropTableEvent;
 import org.apache.impala.catalog.events.MetastoreEvents.MetastoreEvent;
 import org.apache.impala.catalog.events.MetastoreEvents.MetastoreEventPropertyKey;
 import org.apache.impala.catalog.events.MetastoreEventsProcessor;
-import org.apache.impala.catalog.events.MetastoreEventsProcessor.EventProcessorStatus;
 import org.apache.impala.catalog.events.MetastoreNotificationException;
 import org.apache.impala.catalog.monitor.CatalogMonitor;
 import org.apache.impala.catalog.monitor.CatalogOperationTracker;
@@ -725,7 +724,7 @@ public class CatalogOpExecutor {
         Db db = catalog_.getDb(tTable.db_name);
         // Db should have been created by now.
         Preconditions.checkNotNull(db, String.format("Missing db %s", tTable.db_name));
-        Table t = Table.fromThrift(db, tTable);
+        Table t = Table.fromThrift(db, tTable, /*loadedInImpalad*/false);
         // Set a new version to force an overwrite if a table already exists with the same
         // name.
         t.setCatalogVersion(catalog_.incrementAndGetCatalogVersion());
