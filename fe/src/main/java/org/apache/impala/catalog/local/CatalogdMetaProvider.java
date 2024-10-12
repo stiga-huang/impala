@@ -949,7 +949,7 @@ public class CatalogdMetaProvider implements MetaProvider {
               partitionRefs.add(new PartitionRefImpl(p));
             }
             if (((TableMetaRefImpl) table).tableName_.equals("alltypes") && ((TableMetaRefImpl) table).dbName_.startsWith("test_query_with_tbls")) {
-              LOG.info("Partition list of target table has {} items", resp.table_info.partitions.size());
+              LOG.info("Partition list of target table has {} items: {}", resp.table_info.partitions.size(), resp);
             }
             return partitionRefs;
           }
@@ -1110,7 +1110,7 @@ public class CatalogdMetaProvider implements MetaProvider {
       } else {
         checkResponse(table.msTable_.getPartitionKeysSize() == 0, req,
             "Should not return a partition with missing partition meta unless " +
-            "the table is unpartitioned");
+            "the table is unpartitioned: %s", part);
         // For the only partition of a nonpartitioned table, reuse table-level metadata.
         try {
           hdfsStorageDescriptor = HdfsStorageDescriptor.fromStorageDescriptor(
