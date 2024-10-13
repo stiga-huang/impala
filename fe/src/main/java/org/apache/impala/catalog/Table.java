@@ -141,6 +141,9 @@ public abstract class Table extends CatalogObjectImpl implements FeTable {
   // True if this object is stored in an Impalad catalog cache.
   protected boolean storedInImpaladCatalogCache_ = false;
 
+  // True if this object is loaded from testcase files
+  protected boolean loadedFromTestcase_ = false;
+
   // Time spent in the source systems loading/reloading the fs metadata for the table.
   protected long storageMetadataLoadTime_ = 0;
 
@@ -420,6 +423,10 @@ public abstract class Table extends CatalogObjectImpl implements FeTable {
     return storedInImpaladCatalogCache_ || RuntimeEnv.INSTANCE.isTestEnv();
   }
 
+  public boolean isLoadedFromTestcase() {
+    return loadedFromTestcase_;
+  }
+
   public long getLastUsedTime() {
     Preconditions.checkState(lastUsedTime_ != 0 &&
         !isStoredInImpaladCatalogCache());
@@ -640,6 +647,8 @@ public abstract class Table extends CatalogObjectImpl implements FeTable {
     storageMetadataLoadTime_ = thriftTable.getStorage_metadata_load_time_ns();
 
     storedInImpaladCatalogCache_ = loadedInImpalad;
+    // If this is used in catalogd, it can only come from testcase files.
+    if (!loadedInImpalad) loadedFromTestcase_ = true;
   }
 
   /**
