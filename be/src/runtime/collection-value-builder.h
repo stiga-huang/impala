@@ -33,7 +33,7 @@ namespace impala {
 class CollectionValueBuilder {
  public:
   // I did not pick this default for any meaningful reason, feel free to change!
-  static const int DEFAULT_INITIAL_TUPLE_CAPACITY = 4;
+  static const int DEFAULT_INITIAL_TUPLE_CAPACITY = 512;
 
   CollectionValueBuilder(CollectionValue* coll_value, const TupleDescriptor& tuple_desc,
       MemPool* pool, RuntimeState* state,

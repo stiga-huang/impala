@@ -73,6 +73,8 @@ static const string THREAD_USER_TIME = "UserTime";
 static const string THREAD_SYS_TIME = "SysTime";
 static const string THREAD_VOLUNTARY_CONTEXT_SWITCHES = "VoluntaryContextSwitches";
 static const string THREAD_INVOLUNTARY_CONTEXT_SWITCHES = "InvoluntaryContextSwitches";
+static const string THREAD_MINOR_PAGE_FAULTS = "MinorPageFaults";
+static const string THREAD_MAJOR_PAGE_FAULTS = "MajorPageFaults";
 
 // The root counter name for all top level counters.
 static const string ROOT_COUNTER = "";
@@ -1204,6 +1206,10 @@ RuntimeProfile::ThreadCounters* RuntimeProfile::AddThreadCounters(
       AddCounter(prefix + THREAD_VOLUNTARY_CONTEXT_SWITCHES, TUnit::UNIT);
   counter->involuntary_context_switches_ =
       AddCounter(prefix + THREAD_INVOLUNTARY_CONTEXT_SWITCHES, TUnit::UNIT);
+  counter->minor_page_faults_ =
+      AddCounter(prefix + THREAD_MINOR_PAGE_FAULTS, TUnit::UNIT);
+  counter->major_page_faults_ =
+      AddCounter(prefix + THREAD_MAJOR_PAGE_FAULTS, TUnit::UNIT);
   return counter;
 }
 

@@ -624,6 +624,9 @@ class RuntimeProfile::ThreadCounters {
   /// The number of times a context switch resulted due to a higher priority process
   /// becoming runnable or because the current process exceeded its time slice.
   Counter* involuntary_context_switches_;
+
+  Counter* minor_page_faults_;
+  Counter* major_page_faults_;
 };
 
 /// An EventSequence captures a sequence of events (each added by calling MarkEvent()).
@@ -1039,6 +1042,8 @@ class ThreadCounterMeasurement {
     counters_->voluntary_context_switches_->Add(usage.ru_nvcsw - usage_base_.ru_nvcsw);
     counters_->involuntary_context_switches_->Add(
         usage.ru_nivcsw - usage_base_.ru_nivcsw);
+    counters_->minor_page_faults_->Add(usage.ru_minflt - usage_base_.ru_minflt);
+    counters_->major_page_faults_->Add(usage.ru_majflt - usage_base_.ru_majflt);
   }
 
   /// Update counter when object is destroyed
