@@ -137,6 +137,8 @@ Status HdfsScanner::Open(ScannerContext* context) {
   template_tuple_map_[scan_node_->tuple_desc()] = template_tuple_;
 
   decompress_timer_ = ADD_TIMER(scan_node_->runtime_profile(), "DecompressionTime");
+  get_collection_mem_timer_ = ADD_TIMER(scan_node_->runtime_profile(),
+      "AllocateCollectionMemoryTime");
   return Status::OK();
 }
 
@@ -216,6 +218,7 @@ Status HdfsScanner::InitializeWriteTuplesFn(HdfsPartitionDescriptor* partition,
 
 Status HdfsScanner::GetCollectionMemory(CollectionValueBuilder* builder, MemPool** pool,
     Tuple** tuple_mem, TupleRow** tuple_row_mem, int64_t* num_rows) {
+  SCOPED_TIMER(get_collection_mem_timer_);
   int num_tuples;
   *pool = builder->pool();
   RETURN_IF_ERROR(builder->GetFreeMemory(tuple_mem, &num_tuples));

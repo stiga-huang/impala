@@ -87,6 +87,9 @@ class SubplanNode : public ExecNode {
   /// singular-row-src and unnest nodes while evaluating child(1).
   TupleRow* current_row() const { return current_input_row_; }
 
+  /// Time spent in resetting the input batch
+  RuntimeProfile::Counter* row_batch_reset_time_;
+
   /// Current row batch used to get rows from our first child.
   boost::scoped_ptr<RowBatch> input_batch_;
 

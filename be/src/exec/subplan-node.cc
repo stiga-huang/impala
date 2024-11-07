@@ -69,6 +69,7 @@ SubplanNode::SubplanNode(
       current_input_row_(NULL),
       subplan_is_open_(false),
       subplan_eos_(false) {
+  row_batch_reset_time_ = ADD_TIMER(runtime_profile_, "ResetInputBatchTime");
 }
 
 void SubplanNode::SetContainingSubplan(SubplanNode* ancestor, ExecNode* node) {
@@ -146,7 +147,10 @@ Status SubplanNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos)
       // Could be at capacity after resources have been transferred to it.
       if (row_batch->AtCapacity()) return Status::OK();
       // Continue fetching input rows.
-      input_batch_->Reset();
+      {
+        SCOPED_TIMER(row_batch_reset_time_);
+        input_batch_->Reset();
+      }
       RETURN_IF_ERROR(child(0)->GetNext(state, input_batch_.get(), &input_eos_));
       input_row_idx_ = 0;
       if (input_batch_->num_rows() == 0) continue;
