@@ -435,12 +435,17 @@ Status FragmentInstanceState::ExecInternal() {
 
   RuntimeProfile::Counter* plan_exec_timer =
       ADD_CHILD_TIMER(timings_profile_, "ExecTreeExecTime", EXEC_TIMER_NAME);
+  RuntimeProfile::Counter* batch_reset_timer =
+      ADD_CHILD_TIMER(timings_profile_, "RowBatchResetTime", EXEC_TIMER_NAME);
   SCOPED_THREAD_COUNTER_MEASUREMENT(runtime_state_->total_thread_statistics());
   bool exec_tree_complete = false;
   UpdateState(StateEvent::WAITING_FOR_FIRST_BATCH);
   do {
     Status status;
-    row_batch_->Reset();
+    {
+      SCOPED_TIMER(batch_reset_timer);
+      row_batch_->Reset();
+    }
     {
       SCOPED_TIMER(plan_exec_timer);
       RETURN_IF_ERROR(
@@ -453,8 +458,10 @@ Status FragmentInstanceState::ExecInternal() {
     UpdateState(StateEvent::BATCH_SENT);
   } while (!exec_tree_complete);
   // Release resources from final row batch.
-  row_batch_->Reset();
-
+  {
+    SCOPED_TIMER(batch_reset_timer);
+    row_batch_->Reset();
+  }
   UpdateState(StateEvent::LAST_BATCH_SENT);
 
   // Close the tree before the sink is flushed to release 'exec_tree_' resources.
