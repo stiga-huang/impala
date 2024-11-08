@@ -554,6 +554,11 @@ class HdfsParquetScanner : public HdfsColumnarScanner {
   /// to this counter
   RuntimeProfile::SummaryStatsCounter* parquet_uncompressed_page_size_counter_;
 
+  /// Tracks time spent in assemble collections.
+  RuntimeProfile::Counter* assemble_collection_timer_;
+  /// Includes the time of allocating initial memory in constructing CollectionValueBuilder
+  RuntimeProfile::Counter* init_collection_timer_;
+
   /// Number of collection items read in current row batch. It is a scanner-local counter
   /// used to reduce the frequency of updating HdfsScanNode counter. It is updated by the
   /// callees of AssembleRows() and is merged into the HdfsScanNode counter at the end of

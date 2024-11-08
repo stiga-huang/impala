@@ -122,8 +122,11 @@ bool CollectionColumnReader::ReadSlot(CollectionValue* slot, MemPool* pool) {
 
   // Recursively read the collection into a new CollectionValue.
   *slot = CollectionValue();
+  MonotonicStopWatch sw;
+  sw.Start();
   CollectionValueBuilder builder(
       slot, *slot_desc_->children_tuple_descriptor(), pool, parent_->state_);
+  parent_->init_collection_timer_->Add(sw.ElapsedTime());
   bool continue_execution =
       parent_->AssembleCollection(children_, new_collection_rep_level(), &builder);
   if (!continue_execution) return false;

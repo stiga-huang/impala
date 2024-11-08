@@ -147,6 +147,10 @@ Status HdfsParquetScanner::Open(ScannerContext* context) {
       scan_node_->runtime_profile(), "ParquetUncompressedPageSize", TUnit::BYTES);
   process_page_index_stats_ =
       ADD_SUMMARY_STATS_TIMER(scan_node_->runtime_profile(), "PageIndexProcessingTime");
+  assemble_collection_timer_ = ADD_TIMER(scan_node_->runtime_profile(),
+      "MaterializeCollectionTime");
+  init_collection_timer_ = ADD_TIMER(scan_node_->runtime_profile(),
+      "PreAllocCollectionTime");
 
   codegend_process_scratch_batch_fn_ = scan_node_->GetCodegenFn(THdfsFileFormat::PARQUET);
   if (codegend_process_scratch_batch_fn_ == nullptr) {
@@ -2623,6 +2627,7 @@ Status HdfsParquetScanner::CommitRows(RowBatch* dst_batch, int num_rows) {
 bool HdfsParquetScanner::AssembleCollection(
     const vector<ParquetColumnReader*>& column_readers, int new_collection_rep_level,
     CollectionValueBuilder* coll_value_builder) {
+  SCOPED_TIMER(assemble_collection_timer_);
   DCHECK(!column_readers.empty());
   DCHECK_GE(new_collection_rep_level, 0);
   DCHECK(coll_value_builder != nullptr);
