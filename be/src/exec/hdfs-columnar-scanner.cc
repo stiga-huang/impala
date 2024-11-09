@@ -67,14 +67,22 @@ PROFILE_DEFINE_COUNTER(IoReadSkippedBytes, DEBUG, TUnit::BYTES,
 PROFILE_DEFINE_COUNTER(NumFileMetadataRead, DEBUG, TUnit::UNIT,
     "The total number of file metadata reads done in place of rows or row groups / "
     "stripe iteration.");
+PROFILE_DEFINE_TIMER(ScratchBatchMemAllocDuration, DEBUG,
+    "Time spent in malloc() used by MemPools of the scratch batch.");
+PROFILE_DEFINE_TIMER(ScratchBatchMemFreeDuration, DEBUG,
+    "The total number of times malloc() is called by MemPools of the scratch batch.");
+PROFILE_DEFINE_COUNTER(ScratchBatchMemAllocTimes, DEBUG, TUnit::UNIT,
+    "Time spent in free() used by MemPools of the scratch batch.");
+PROFILE_DEFINE_COUNTER(ScratchBatchMemFreeTimes, DEBUG, TUnit::UNIT,
+    "The total number of times free() is called by MemPools of the scratch batch.");
 
 const char* HdfsColumnarScanner::LLVM_CLASS_NAME = "class.impala::HdfsColumnarScanner";
 
 HdfsColumnarScanner::HdfsColumnarScanner(HdfsScanNodeBase* scan_node,
     RuntimeState* state) :
     HdfsScanner(scan_node, state),
-    scratch_batch_(new ScratchTupleBatch(
-        *scan_node->row_desc(), state_->batch_size(), scan_node->mem_tracker())) {
+    scratch_batch_(new ScratchTupleBatch(*scan_node->row_desc(), state_->batch_size(),
+        scan_node->mem_tracker(), &scratch_mem_counters_)) {
 }
 
 HdfsColumnarScanner::~HdfsColumnarScanner() {}
@@ -104,6 +112,10 @@ Status HdfsColumnarScanner::Open(ScannerContext* context) {
   io_total_bytes_ = PROFILE_IoReadTotalBytes.Instantiate(profile);
   io_skipped_bytes_ = PROFILE_IoReadSkippedBytes.Instantiate(profile);
   num_file_metadata_read_ = PROFILE_NumFileMetadataRead.Instantiate(profile);
+  scratch_mem_alloc_duration_ = PROFILE_ScratchBatchMemAllocDuration.Instantiate(profile);
+  scratch_mem_free_duration_ = PROFILE_ScratchBatchMemFreeDuration.Instantiate(profile);
+  scratch_mem_alloc_times_ = PROFILE_ScratchBatchMemAllocTimes.Instantiate(profile);
+  scratch_mem_free_times_ = PROFILE_ScratchBatchMemFreeTimes.Instantiate(profile);
   return Status::OK();
 }
 
@@ -316,5 +328,13 @@ void HdfsColumnarScanner::AddAsyncReadBytesCounter(int64_t total_bytes) {
 
 void HdfsColumnarScanner::AddSkippedReadBytesCounter(int64_t total_bytes) {
   io_skipped_bytes_->Add(total_bytes);
+}
+
+void HdfsColumnarScanner::CloseInternal() {
+  scratch_mem_alloc_duration_->Add(scratch_mem_counters_.sys_alloc_duration);
+  scratch_mem_alloc_times_->Add(scratch_mem_counters_.sys_alloc_times);
+  scratch_mem_free_duration_->Add(scratch_mem_counters_.sys_free_duration);
+  scratch_mem_free_times_->Add(scratch_mem_counters_.sys_free_times);
+  HdfsScanner::CloseInternal();
 }
 }

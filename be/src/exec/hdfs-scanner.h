@@ -168,7 +168,7 @@ class HdfsScanner {
   /// row batch has been attached to the row batch queue (if applicable) to avoid freeing
   /// memory that might be referenced by the last batch.
   /// Only valid to call if 'is_closed_' is false. Sets 'is_closed_' to true.
-  void CloseInternal();
+  virtual void CloseInternal();
 
   /// Only valid to call if the parent scan node is single-threaded.
   bool eos() const {

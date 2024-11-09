@@ -35,6 +35,23 @@ namespace impala {
 
 class MemTracker;
 
+struct MemPoolCounters {
+ public:
+  /// Number of times we invoke malloc()
+  uint64_t sys_alloc_times = 0;
+
+  /// Number of times we invoke free()
+  uint64_t sys_free_times = 0;
+
+  /// Duration spent in malloc()
+  uint64_t sys_alloc_duration = 0;
+
+  /// Duration spent in free()
+  uint64_t sys_free_duration = 0;
+
+  int max_chunk_size = 0;
+};
+
 /// A MemPool maintains a list of memory chunks from which it allocates memory in
 /// response to Allocate() calls;
 /// Chunks stay around for the lifetime of the mempool or until they are passed on to
@@ -97,7 +114,8 @@ class MemPool {
   /// 'tracker' tracks the amount of memory allocated by this pool. Must not be NULL.
   /// If 'enforce_binary_chunk_sizes' is set to true then all chunk sizes
   /// allocated will be rounded up to the next power of two.
-  MemPool(MemTracker* mem_tracker, bool enforce_binary_chunk_sizes = false);
+  MemPool(MemTracker* mem_tracker, bool enforce_binary_chunk_sizes = false,
+      MemPoolCounters* counters = nullptr);
 
   /// Frees all chunks of memory and subtracts the total allocated bytes
   /// from the registered limits.
@@ -245,6 +263,8 @@ class MemPool {
   /// If set to true, all chunk sizes allocated will be rounded up to the next power of
   /// two.
   const bool enforce_binary_chunk_sizes_;
+
+  MemPoolCounters* counters_;
 
   /// Find or allocated a chunk with at least min_size spare capacity and update
   /// current_chunk_idx_. Also updates chunks_, chunk_sizes_ and allocated_bytes_

@@ -38,6 +38,8 @@ class HdfsColumnarScanner : public HdfsScanner {
 
   virtual Status Open(ScannerContext* context) override WARN_UNUSED_RESULT;
 
+  virtual void CloseInternal() override;
+
   /// Codegen ProcessScratchBatch(). Stores the resulting function in
   /// 'process_scratch_batch_fn' if codegen was successful or NULL otherwise.
   static Status Codegen(HdfsScanPlanNode* node, FragmentState* state,
@@ -56,6 +58,9 @@ class HdfsColumnarScanner : public HdfsScanner {
   static const char* LLVM_CLASS_NAME;
 
  protected:
+  /// MemPool counters for scratch batch
+  MemPoolCounters scratch_mem_counters_;
+
   /// Column readers will write slot values into this scratch batch for
   /// top-level tuples. See AssembleRows() in the derived classes.
   boost::scoped_ptr<ScratchTupleBatch> scratch_batch_;
@@ -151,6 +156,10 @@ class HdfsColumnarScanner : public HdfsScanner {
   /// row groups / stripes.
   RuntimeProfile::Counter* num_file_metadata_read_;
 
+  RuntimeProfile::Counter* scratch_mem_alloc_duration_;
+  RuntimeProfile::Counter* scratch_mem_alloc_times_;
+  RuntimeProfile::Counter* scratch_mem_free_duration_;
+  RuntimeProfile::Counter* scratch_mem_free_times_;
  private:
   int ProcessScratchBatchCodegenOrInterpret(RowBatch* dst_batch);
 };

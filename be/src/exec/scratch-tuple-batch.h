@@ -82,11 +82,12 @@ struct ScratchTupleBatch {
   boost::scoped_array<bool> selected_rows;
 
   ScratchTupleBatch(
-      const RowDescriptor& row_desc, int batch_size, MemTracker* mem_tracker)
+      const RowDescriptor& row_desc, int batch_size, MemTracker* mem_tracker,
+      MemPoolCounters* counters = nullptr)
     : capacity(batch_size),
       tuple_byte_size(row_desc.GetRowSize()),
-      tuple_mem_pool(mem_tracker),
-      aux_mem_pool(mem_tracker),
+      tuple_mem_pool(mem_tracker, false, counters),
+      aux_mem_pool(mem_tracker, false, counters),
       selected_rows(new bool[batch_size]) {
     DCHECK_EQ(row_desc.tuple_descriptors().size(), 1);
   }

@@ -500,6 +500,7 @@ void HdfsOrcScanner::Close(RowBatch* row_batch) {
     stats->IncrCounters(FilterStats::ROWS_KEY, local.total_possible,
         local.considered, local.rejected);
   }
+
   CloseInternal();
 }
 
