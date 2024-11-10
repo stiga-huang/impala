@@ -66,6 +66,8 @@ class StopWatch {
     running_ = false;
   }
 
+  bool IsRunning() const { return running_; }
+
   /// Returns total time in cpu ticks for which the stopwatch was running, including
   /// the time since Start() was called, if it is currently running.
   uint64_t ElapsedTime() const {
@@ -126,6 +128,8 @@ class MonotonicStopWatch {
     total_time_ += RunningTime();
     running_ = false;
   }
+
+  bool IsRunning() { return running_; }
 
   /// Set the time ceiling of the stop watch to Now(). The stop watch won't run past the
   /// ceiling.

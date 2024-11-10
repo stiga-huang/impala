@@ -962,6 +962,13 @@ class ScopedTimer {
   void Stop() { sw_.Stop(); }
   void Start() { sw_.Start(); }
 
+  /// Stops the timer and returns whether it was running.
+  bool CheckAndStop() {
+    bool running = sw_.IsRunning();
+    sw_.Stop();
+    return running;
+  }
+
   void UpdateCounter() {
     if (IsCancelled()) return;
     int64_t elapsed = sw_.ElapsedTime();

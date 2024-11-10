@@ -72,6 +72,8 @@ PROFILE_DEFINE_TIME_SERIES_COUNTER(BytesReadSeries, UNSTABLE, TUnit::BYTES,
     "Time series of BytesRead that samples the BytesRead counter.");
 PROFILE_DEFINE_TIMER(MaterializeTupleTime, UNSTABLE, "Wall clock time spent "
     "materializing tuples and evaluating predicates.");
+PROFILE_DEFINE_TIMER(MaterializeCollectionTime, UNSTABLE, "Wall clock time spent "
+    "materializing arrays/maps.");
 PROFILE_DEFINE_COUNTER(NumScannerThreadsStarted, DEBUG, TUnit::UNIT,
     "NumScannerThreadsStarted - the number of scanner threads started for the duration "
     "of the ScanNode. A single scanner thread will likely process multiple scan ranges."
@@ -169,6 +171,8 @@ Status ScanNode::Prepare(RuntimeState* state) {
 
   rows_read_counter_ = PROFILE_RowsRead.Instantiate(runtime_profile());
   materialize_tuple_timer_ = PROFILE_MaterializeTupleTime.Instantiate(runtime_profile());
+  materialize_collection_timer_ = PROFILE_MaterializeCollectionTime.Instantiate(
+      runtime_profile());
 
   DCHECK_EQ(filter_exprs_.size(), filter_ctxs_.size());
   for (int i = 0; i < filter_exprs_.size(); ++i) {

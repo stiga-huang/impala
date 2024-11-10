@@ -94,6 +94,7 @@ HdfsParquetScanner::HdfsParquetScanner(HdfsScanNodeBase* scan_node, RuntimeState
     dictionary_pool_(new MemPool(scan_node->mem_tracker())),
     stats_batch_read_pool_(new MemPool(scan_node->mem_tracker())),
     assemble_rows_timer_(scan_node_->materialize_tuple_timer()),
+    assemble_collections_timer_(scan_node_->materialize_collection_timer()),
     num_stats_filtered_row_groups_counter_(nullptr),
     num_minmax_filtered_row_groups_counter_(nullptr),
     num_bloom_filtered_row_groups_counter_(nullptr),
@@ -107,6 +108,7 @@ HdfsParquetScanner::HdfsParquetScanner(HdfsScanNodeBase* scan_node, RuntimeState
     page_index_(this),
     late_materialization_threshold_(
       state->query_options().parquet_late_materialization_threshold) {
+  assemble_collections_timer_.Stop();
   assemble_rows_timer_.Stop();
   complete_micro_batch_ = {0, state_->batch_size() - 1, state_->batch_size()};
 }
@@ -147,8 +149,6 @@ Status HdfsParquetScanner::Open(ScannerContext* context) {
       scan_node_->runtime_profile(), "ParquetUncompressedPageSize", TUnit::BYTES);
   process_page_index_stats_ =
       ADD_SUMMARY_STATS_TIMER(scan_node_->runtime_profile(), "PageIndexProcessingTime");
-  assemble_collection_timer_ = ADD_TIMER(scan_node_->runtime_profile(),
-      "MaterializeCollectionTime");
   init_collection_timer_ = ADD_TIMER(scan_node_->runtime_profile(),
       "PreAllocCollectionTime");
 
@@ -323,6 +323,7 @@ void HdfsParquetScanner::Close(RowBatch* row_batch) {
     BaseScalarColumnReader* scalar_reader = static_cast<BaseScalarColumnReader*>(reader);
     compression_types.push_back(scalar_reader->codec());
   }
+  assemble_collections_timer_.ReleaseCounter();
   assemble_rows_timer_.Stop();
   assemble_rows_timer_.ReleaseCounter();
 
@@ -2627,7 +2628,7 @@ Status HdfsParquetScanner::CommitRows(RowBatch* dst_batch, int num_rows) {
 bool HdfsParquetScanner::AssembleCollection(
     const vector<ParquetColumnReader*>& column_readers, int new_collection_rep_level,
     CollectionValueBuilder* coll_value_builder) {
-  SCOPED_TIMER(assemble_collection_timer_);
+  assemble_collections_timer_.Start();
   DCHECK(!column_readers.empty());
   DCHECK_GE(new_collection_rep_level, 0);
   DCHECK(coll_value_builder != nullptr);
@@ -2701,6 +2702,7 @@ bool HdfsParquetScanner::AssembleCollection(
       FILE_CHECK_EQ(column_readers[c]->rep_level(), column_readers[0]->rep_level());
     }
   }
+  assemble_collections_timer_.Stop();
   return continue_execution;
 }
 

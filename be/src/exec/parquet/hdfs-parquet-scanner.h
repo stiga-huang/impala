@@ -500,6 +500,9 @@ class HdfsParquetScanner : public HdfsColumnarScanner {
 
   /// Timer for materializing rows.  This ignores time getting the next buffer.
   ScopedTimer<MonotonicStopWatch> assemble_rows_timer_;
+  ScopedTimer<MonotonicStopWatch> assemble_collections_timer_;
+  /// Includes the time of allocating initial memory in constructing CollectionValueBuilder
+  RuntimeProfile::Counter* init_collection_timer_;
 
   /// Average and min/max time spent processing the page index for each row group.
   RuntimeProfile::SummaryStatsCounter* process_page_index_stats_;
@@ -553,11 +556,6 @@ class HdfsParquetScanner : public HdfsColumnarScanner {
   /// to this counter, (2) when a page that is not compressed is read, its size is added
   /// to this counter
   RuntimeProfile::SummaryStatsCounter* parquet_uncompressed_page_size_counter_;
-
-  /// Tracks time spent in assemble collections.
-  RuntimeProfile::Counter* assemble_collection_timer_;
-  /// Includes the time of allocating initial memory in constructing CollectionValueBuilder
-  RuntimeProfile::Counter* init_collection_timer_;
 
   /// Number of collection items read in current row batch. It is a scanner-local counter
   /// used to reduce the frequency of updating HdfsScanNode counter. It is updated by the
