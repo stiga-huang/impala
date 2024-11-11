@@ -67,6 +67,8 @@ PROFILE_DEFINE_COUNTER(IoReadSkippedBytes, DEBUG, TUnit::BYTES,
 PROFILE_DEFINE_COUNTER(NumFileMetadataRead, DEBUG, TUnit::UNIT,
     "The total number of file metadata reads done in place of rows or row groups / "
     "stripe iteration.");
+PROFILE_DEFINE_TIMER(EvalRowFilterTime, DEBUG, "Time spent in evaluating row level "
+    "runtime filters and predicates.");
 PROFILE_DEFINE_TIMER(ScratchBatchMemAllocDuration, DEBUG,
     "Time spent in malloc() used by MemPools of the scratch batch.");
 PROFILE_DEFINE_TIMER(ScratchBatchMemFreeDuration, DEBUG,
@@ -112,6 +114,7 @@ Status HdfsColumnarScanner::Open(ScannerContext* context) {
   io_total_bytes_ = PROFILE_IoReadTotalBytes.Instantiate(profile);
   io_skipped_bytes_ = PROFILE_IoReadSkippedBytes.Instantiate(profile);
   num_file_metadata_read_ = PROFILE_NumFileMetadataRead.Instantiate(profile);
+  eval_row_filter_time_ = PROFILE_EvalRowFilterTime.Instantiate(profile);
   scratch_mem_alloc_duration_ = PROFILE_ScratchBatchMemAllocDuration.Instantiate(profile);
   scratch_mem_free_duration_ = PROFILE_ScratchBatchMemFreeDuration.Instantiate(profile);
   scratch_mem_alloc_times_ = PROFILE_ScratchBatchMemAllocTimes.Instantiate(profile);
@@ -188,6 +191,7 @@ Status HdfsColumnarScanner::Codegen(HdfsScanPlanNode* node, FragmentState* state
 }
 
 int HdfsColumnarScanner::ProcessScratchBatchCodegenOrInterpret(RowBatch* dst_batch) {
+  SCOPED_TIMER(eval_row_filter_time_);
   return CallCodegendOrInterpreted<ProcessScratchBatchFn>::invoke(this,
       codegend_process_scratch_batch_fn_, &HdfsColumnarScanner::ProcessScratchBatch,
       dst_batch);

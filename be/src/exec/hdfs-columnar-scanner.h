@@ -156,6 +156,7 @@ class HdfsColumnarScanner : public HdfsScanner {
   /// row groups / stripes.
   RuntimeProfile::Counter* num_file_metadata_read_;
 
+  RuntimeProfile::Counter* eval_row_filter_time_;
   RuntimeProfile::Counter* scratch_mem_alloc_duration_;
   RuntimeProfile::Counter* scratch_mem_alloc_times_;
   RuntimeProfile::Counter* scratch_mem_free_duration_;
