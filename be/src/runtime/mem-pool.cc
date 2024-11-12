@@ -36,13 +36,15 @@ const char* MemPool::LLVM_CLASS_NAME = "class.impala::MemPool";
 const int MemPool::DEFAULT_ALIGNMENT;
 uint32_t MemPool::zero_length_region_ alignas(std::max_align_t) = MEM_POOL_POISON;
 
-MemPool::MemPool(MemTracker* mem_tracker, bool enforce_binary_chunk_sizes)
+MemPool::MemPool(MemTracker* mem_tracker, bool enforce_binary_chunk_sizes,
+    MemPoolCounters* counters)
   : current_chunk_idx_(-1),
     next_chunk_size_(INITIAL_CHUNK_SIZE),
     total_allocated_bytes_(0),
     total_reserved_bytes_(0),
     mem_tracker_(mem_tracker),
-    enforce_binary_chunk_sizes_(enforce_binary_chunk_sizes) {
+    enforce_binary_chunk_sizes_(enforce_binary_chunk_sizes),
+    counters_(counters) {
   DCHECK(mem_tracker != NULL);
   DCHECK_EQ(zero_length_region_, MEM_POOL_POISON);
 }
@@ -54,10 +56,11 @@ MemPool::ChunkInfo::ChunkInfo(int64_t size, uint8_t* buf)
 }
 
 MemPool::~MemPool() {
-  int64_t total_bytes_released = 0;
-  for (size_t i = 0; i < chunks_.size(); ++i) {
-    total_bytes_released += chunks_[i].size;
-    free(chunks_[i].data);
+  MonotonicStopWatch sw;
+  sw.Start();
+  for (auto& chunk : chunks_) {
+    free(chunk.data);
+    if (counters_) counters_->sys_free_duration.UpdateCounter(sw.Reset());
   }
 
   DCHECK(chunks_.empty()) << "Must call FreeAll() or AcquireData() for this pool";
@@ -78,9 +81,12 @@ void MemPool::Clear() {
 void MemPool::FreeAll() {
   DFAKE_SCOPED_LOCK(mutex_);
   int64_t total_bytes_released = 0;
+  MonotonicStopWatch sw;
+  sw.Start();
   for (auto& chunk: chunks_) {
     total_bytes_released += chunk.size;
     free(chunk.data);
+    if (counters_) counters_->sys_free_duration.UpdateCounter(sw.Reset());
   }
   chunks_.clear();
   next_chunk_size_ = INITIAL_CHUNK_SIZE;
@@ -128,13 +134,19 @@ bool MemPool::FindChunk(int64_t min_size, bool check_limits) noexcept {
     mem_tracker_->Consume(chunk_size);
   }
 
+  MonotonicStopWatch sys_alloc_sw;
+  sys_alloc_sw.Start();
   // Allocate a new chunk. Return early if malloc fails.
   uint8_t* buf = reinterpret_cast<uint8_t*>(malloc(chunk_size));
   if (UNLIKELY(buf == NULL)) {
     mem_tracker_->Release(chunk_size);
     return false;
   }
-
+  if (counters_) {
+    uint64_t duration = sys_alloc_sw.ElapsedTime();
+    counters_->sys_alloc_duration.UpdateCounter(duration);
+    counters_->allocated_bytes.UpdateCounter(chunk_size);
+  }
   ASAN_POISON_MEMORY_REGION(buf, chunk_size);
 
   // Put it before the first free chunk. If no free chunks, it goes at the end.
