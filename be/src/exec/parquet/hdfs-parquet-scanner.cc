@@ -152,7 +152,14 @@ Status HdfsParquetScanner::Open(ScannerContext* context) {
       scan_node_->runtime_profile(), "ParquetUncompressedPageSize", TUnit::BYTES);
   process_page_index_stats_ =
       ADD_SUMMARY_STATS_TIMER(scan_node_->runtime_profile(), "PageIndexProcessingTime");
-
+  parquet_data_page_pool_alloc_duration_ = ADD_SUMMARY_STATS_TIMER(
+      scan_node_->runtime_profile(), "ParquetDataPagePoolAllocDuration");
+  parquet_data_page_pool_alloc_bytes_ = ADD_SUMMARY_STATS_COUNTER(
+      scan_node_->runtime_profile(), "ParquetDataPagePoolAllocBytes", TUnit::BYTES);
+  parquet_data_page_pool_free_duration_ = ADD_SUMMARY_STATS_TIMER(
+      scan_node_->runtime_profile(), "ParquetDataPagePoolFreeDuration");
+  parquet_data_page_pool_free_bytes_ = ADD_SUMMARY_STATS_COUNTER(
+      scan_node_->runtime_profile(), "ParquetDataPagePoolFreeBytes", TUnit::BYTES);
   codegend_process_scratch_batch_fn_ = scan_node_->GetCodegenFn(THdfsFileFormat::PARQUET);
   if (codegend_process_scratch_batch_fn_ == nullptr) {
     scan_node_->IncNumScannersCodegenDisabled();
@@ -323,6 +330,11 @@ void HdfsParquetScanner::Close(RowBatch* row_batch) {
     }
     BaseScalarColumnReader* scalar_reader = static_cast<BaseScalarColumnReader*>(reader);
     compression_types.push_back(scalar_reader->codec());
+    MemPoolCounters counters = scalar_reader->GetDataPagePoolCounters();
+    parquet_data_page_pool_alloc_duration_->Merge(counters.sys_alloc_duration);
+    parquet_data_page_pool_alloc_bytes_->Merge(counters.allocated_bytes);
+    parquet_data_page_pool_free_duration_->Merge(counters.sys_free_duration);
+    parquet_data_page_pool_free_bytes_->Merge(counters.freed_bytes);
   }
   assemble_rows_timer_.Stop();
   assemble_rows_timer_.ReleaseCounter();
