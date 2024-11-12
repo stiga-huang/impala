@@ -42,7 +42,6 @@
 namespace impala {
 
 class Codec;
-class CollectionValueBuilder;
 class Compression;
 class Expr;
 class HdfsPartitionDescriptor;
@@ -168,7 +167,7 @@ class HdfsScanner {
   /// row batch has been attached to the row batch queue (if applicable) to avoid freeing
   /// memory that might be referenced by the last batch.
   /// Only valid to call if 'is_closed_' is false. Sets 'is_closed_' to true.
-  void CloseInternal();
+  virtual void CloseInternal();
 
   /// Only valid to call if the parent scan node is single-threaded.
   bool eos() const {
@@ -429,17 +428,6 @@ class HdfsScanner {
 
   /// Reset internal state for a new scan range.
   virtual Status InitNewRange() WARN_UNUSED_RESULT = 0;
-
-  /// Gets memory for outputting tuples into the CollectionValue being constructed via
-  /// 'builder'. If memory limit is exceeded, an error status is returned. Otherwise,
-  /// returns the maximum number of tuples that can be output in 'num_rows'.
-  ///
-  /// The returned TupleRow* should not be incremented (i.e. don't call next_row() on
-  /// it). Instead, incrementing *tuple_mem will update *tuple_row_mem to be pointing at
-  /// the next tuple. This also means its unnecessary to call
-  /// (*tuple_row_mem)->SetTuple().
-  Status GetCollectionMemory(CollectionValueBuilder* builder, MemPool** pool,
-      Tuple** tuple_mem, TupleRow** tuple_row_mem, int64_t* num_rows) WARN_UNUSED_RESULT;
 
   /// Commits 'num_rows' to 'row_batch'. Advances 'tuple_mem_' and 'tuple_' accordingly.
   /// Frees expr result allocations. Returns non-OK if 'context_' is cancelled or the

@@ -48,6 +48,7 @@
 #include "util/container-util.h"
 #include "util/debug-util.h"
 #include "util/periodic-counter-updater.h"
+#include "util/scope-exit-trigger.h"
 #include "util/uid-util.h"
 
 #include "common/names.h"
@@ -435,6 +436,15 @@ Status FragmentInstanceState::ExecInternal() {
 
   RuntimeProfile::Counter* plan_exec_timer =
       ADD_CHILD_TIMER(timings_profile_, "ExecTreeExecTime", EXEC_TIMER_NAME);
+  RuntimeProfile::SummaryStatsCounter* row_batch_mem_free_duration =
+      ADD_SUMMARY_STATS_TIMER(profile(), "RowBatchMemPoolFreeDuration");
+  RuntimeProfile::SummaryStatsCounter* row_batch_mem_free_bytes =
+      ADD_SUMMARY_STATS_COUNTER(profile(), "RowBatchMemPoolFreeBytes", TUnit::BYTES);
+  auto update_counters = MakeScopeExitTrigger([&]() {
+    MemPoolCounters mem_counters = row_batch_->GetMemPoolCounters();
+    row_batch_mem_free_duration->Merge(mem_counters.sys_free_duration);
+    row_batch_mem_free_bytes->Merge(mem_counters.freed_bytes);
+  });
   SCOPED_THREAD_COUNTER_MEASUREMENT(runtime_state_->total_thread_statistics());
   bool exec_tree_complete = false;
   UpdateState(StateEvent::WAITING_FOR_FIRST_BATCH);
