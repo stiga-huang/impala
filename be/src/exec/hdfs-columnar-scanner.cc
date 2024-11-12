@@ -23,6 +23,7 @@
 #include "codegen/llvm-codegen.h"
 #include "exec/hdfs-scan-node-base.h"
 #include "exec/scratch-tuple-batch.h"
+#include "runtime/collection-value-builder.h"
 #include "runtime/exec-env.h"
 #include "runtime/fragment-state.h"
 #include "runtime/io/disk-io-mgr.h"
@@ -67,14 +68,31 @@ PROFILE_DEFINE_COUNTER(IoReadSkippedBytes, DEBUG, TUnit::BYTES,
 PROFILE_DEFINE_COUNTER(NumFileMetadataRead, DEBUG, TUnit::UNIT,
     "The total number of file metadata reads done in place of rows or row groups / "
     "stripe iteration.");
+PROFILE_DEFINE_TIMER(ScratchBatchMemAllocTotalDuration, DEBUG,
+    "Total time spent in malloc() used by MemPools of the scratch batch.");
+PROFILE_DEFINE_TIMER(ScratchBatchMemAllocMaxDuration, DEBUG,
+    "Max time spent in malloc() used by MemPools of the scratch batch.");
+PROFILE_DEFINE_TIMER(ScratchBatchMemFreeDuration, DEBUG,
+    "The total number of times malloc() is called by MemPools of the scratch batch.");
+PROFILE_DEFINE_COUNTER(ScratchBatchMemAllocTimes, DEBUG, TUnit::UNIT,
+    "Time spent in free() used by MemPools of the scratch batch.");
+PROFILE_DEFINE_COUNTER(ScratchBatchMemAllocTotalBytes, DEBUG, TUnit::BYTES,
+    "The total number of bytes allocated by MemPools of the scratch batch.");
+PROFILE_DEFINE_COUNTER(ScratchBatchMemAllocMaxBytes, DEBUG, TUnit::BYTES,
+    "The max number of bytes allocated once by MemPools of the scratch batch.");
+PROFILE_DEFINE_COUNTER(ScratchBatchMemFreeTimes, DEBUG, TUnit::UNIT,
+    "The total number of times free() is called by MemPools of the scratch batch.");
+PROFILE_DEFINE_TIMER(MaterializeCollectionGetMemTime, UNSTABLE, "Wall clock time spent "
+    "getting/allocating collection memory. Includes the memcpy duration when doubling "
+    "the tuple buffer.");
 
 const char* HdfsColumnarScanner::LLVM_CLASS_NAME = "class.impala::HdfsColumnarScanner";
 
 HdfsColumnarScanner::HdfsColumnarScanner(HdfsScanNodeBase* scan_node,
     RuntimeState* state) :
     HdfsScanner(scan_node, state),
-    scratch_batch_(new ScratchTupleBatch(
-        *scan_node->row_desc(), state_->batch_size(), scan_node->mem_tracker())) {
+    scratch_batch_(new ScratchTupleBatch(*scan_node->row_desc(), state_->batch_size(),
+        scan_node->mem_tracker(), &scratch_mem_counters_)) {
 }
 
 HdfsColumnarScanner::~HdfsColumnarScanner() {}
@@ -104,6 +122,21 @@ Status HdfsColumnarScanner::Open(ScannerContext* context) {
   io_total_bytes_ = PROFILE_IoReadTotalBytes.Instantiate(profile);
   io_skipped_bytes_ = PROFILE_IoReadSkippedBytes.Instantiate(profile);
   num_file_metadata_read_ = PROFILE_NumFileMetadataRead.Instantiate(profile);
+  scratch_mem_alloc_total_duration_ =
+      PROFILE_ScratchBatchMemAllocTotalDuration.Instantiate(profile);
+  scratch_mem_alloc_max_duration_ =
+      PROFILE_ScratchBatchMemAllocMaxDuration.Instantiate(profile);
+  scratch_mem_alloc_total_bytes_ =
+      PROFILE_ScratchBatchMemAllocTotalBytes.Instantiate(profile);
+  scratch_mem_alloc_max_bytes_ = PROFILE_ScratchBatchMemAllocMaxBytes.Instantiate(profile);
+  scratch_mem_free_duration_ = PROFILE_ScratchBatchMemFreeDuration.Instantiate(profile);
+  scratch_mem_alloc_times_ = PROFILE_ScratchBatchMemAllocTimes.Instantiate(profile);
+  scratch_mem_free_times_ = PROFILE_ScratchBatchMemFreeTimes.Instantiate(profile);
+  // Only add this counter when there are array/map slots.
+  if (!scan_node_->tuple_desc()->collection_slots().empty()) {
+    get_collection_mem_timer_ =
+        PROFILE_MaterializeCollectionGetMemTime.Instantiate(profile);
+  }
   return Status::OK();
 }
 
@@ -316,5 +349,29 @@ void HdfsColumnarScanner::AddAsyncReadBytesCounter(int64_t total_bytes) {
 
 void HdfsColumnarScanner::AddSkippedReadBytesCounter(int64_t total_bytes) {
   io_skipped_bytes_->Add(total_bytes);
+}
+
+void HdfsColumnarScanner::CloseInternal() {
+  scratch_mem_alloc_total_duration_->Add(scratch_mem_counters_.sys_alloc_duration);
+  scratch_mem_alloc_max_duration_->Set(
+      (int64_t) scratch_mem_counters_.sys_alloc_max_duration);
+  scratch_mem_alloc_total_bytes_->Add(scratch_mem_counters_.total_allocated_bytes);
+  scratch_mem_alloc_max_bytes_->Set(scratch_mem_counters_.max_chunk_size);
+  scratch_mem_alloc_times_->Add(scratch_mem_counters_.sys_alloc_times);
+  scratch_mem_free_duration_->Add(scratch_mem_counters_.sys_free_duration);
+  scratch_mem_free_times_->Add(scratch_mem_counters_.sys_free_times);
+  HdfsScanner::CloseInternal();
+}
+
+Status HdfsColumnarScanner::GetCollectionMemory(CollectionValueBuilder* builder,
+    MemPool** pool, Tuple** tuple_mem, TupleRow** tuple_row_mem, int64_t* num_rows) {
+  SCOPED_TIMER(get_collection_mem_timer_);
+  int num_tuples;
+  *pool = builder->pool();
+  RETURN_IF_ERROR(builder->GetFreeMemory(tuple_mem, &num_tuples));
+  // Treat tuple as a single-tuple row
+  *tuple_row_mem = reinterpret_cast<TupleRow*>(tuple_mem);
+  *num_rows = num_tuples;
+  return Status::OK();
 }
 }
