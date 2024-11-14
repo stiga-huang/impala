@@ -1519,6 +1519,7 @@ Status BaseScalarColumnReader::HandleTooEarlyEos() {
 }
 
 bool BaseScalarColumnReader::NextPage() {
+  bool restart_coll_timer = parent_->assemble_collections_timer_.CheckAndStop();
   parent_->assemble_rows_timer_.Stop();
   parent_->parse_status_ = ReadDataPage();
   if (UNLIKELY(!parent_->parse_status_.ok())) return false;
@@ -1529,11 +1530,13 @@ bool BaseScalarColumnReader::NextPage() {
     return false;
   }
   parent_->assemble_rows_timer_.Start();
+  if (restart_coll_timer) parent_->assemble_collections_timer_.Start();
   return true;
 }
 
 bool BaseScalarColumnReader::AdvanceNextPageHeader() {
   num_buffered_values_ = 0;
+  bool restart_coll_timer = parent_->assemble_collections_timer_.CheckAndStop();
   parent_->assemble_rows_timer_.Stop();
   parent_->parse_status_ = ReadNextDataPageHeader();
   if (UNLIKELY(!parent_->parse_status_.ok())) return false;
@@ -1544,6 +1547,7 @@ bool BaseScalarColumnReader::AdvanceNextPageHeader() {
     return false;
   }
   parent_->assemble_rows_timer_.Start();
+  if (restart_coll_timer) parent_->assemble_collections_timer_.Start();
   return true;
 }
 

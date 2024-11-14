@@ -295,9 +295,6 @@ class HdfsOrcScanner : public HdfsColumnarScanner {
   /// offset, and there are no two overlapping range.
   vector<ColumnRange> columnRanges_;
 
-  /// Timer for materializing rows. This ignores time getting the next buffer.
-  ScopedTimer<MonotonicStopWatch> assemble_rows_timer_;
-
   /// Number of stripes that need to be read.
   RuntimeProfile::Counter* num_stripes_counter_ = nullptr;
 

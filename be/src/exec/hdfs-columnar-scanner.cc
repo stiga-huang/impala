@@ -85,6 +85,8 @@ PROFILE_DEFINE_COUNTER(ScratchBatchMemFreeTimes, DEBUG, TUnit::UNIT,
 PROFILE_DEFINE_TIMER(MaterializeCollectionGetMemTime, UNSTABLE, "Wall clock time spent "
     "getting/allocating collection memory. Includes the memcpy duration when doubling "
     "the tuple buffer.");
+PROFILE_DEFINE_TIMER(EvalRowFilterTime, DEBUG, "Time spent in evaluating row level "
+    "runtime filters and predicates.");
 
 const char* HdfsColumnarScanner::LLVM_CLASS_NAME = "class.impala::HdfsColumnarScanner";
 
@@ -92,7 +94,9 @@ HdfsColumnarScanner::HdfsColumnarScanner(HdfsScanNodeBase* scan_node,
     RuntimeState* state) :
     HdfsScanner(scan_node, state),
     scratch_batch_(new ScratchTupleBatch(*scan_node->row_desc(), state_->batch_size(),
-        scan_node->mem_tracker(), &scratch_mem_counters_)) {
+        scan_node->mem_tracker(), &scratch_mem_counters_)),
+    assemble_rows_timer_(scan_node_->materialize_tuple_timer()) {
+  assemble_rows_timer_.Stop();
 }
 
 HdfsColumnarScanner::~HdfsColumnarScanner() {}
@@ -137,6 +141,7 @@ Status HdfsColumnarScanner::Open(ScannerContext* context) {
     get_collection_mem_timer_ =
         PROFILE_MaterializeCollectionGetMemTime.Instantiate(profile);
   }
+  eval_row_filter_time_ = PROFILE_EvalRowFilterTime.Instantiate(profile);
   return Status::OK();
 }
 
@@ -209,9 +214,16 @@ Status HdfsColumnarScanner::Codegen(HdfsScanPlanNode* node, FragmentState* state
 }
 
 int HdfsColumnarScanner::ProcessScratchBatchCodegenOrInterpret(RowBatch* dst_batch) {
-  return CallCodegendOrInterpreted<ProcessScratchBatchFn>::invoke(this,
-      codegend_process_scratch_batch_fn_, &HdfsColumnarScanner::ProcessScratchBatch,
-      dst_batch);
+  assemble_rows_timer_.Stop();
+  int num_row_to_commit;
+  {
+    SCOPED_TIMER(eval_row_filter_time_);
+    num_row_to_commit = CallCodegendOrInterpreted<ProcessScratchBatchFn>::invoke(this,
+        codegend_process_scratch_batch_fn_, &HdfsColumnarScanner::ProcessScratchBatch,
+        dst_batch);
+  }
+  assemble_rows_timer_.Start();
+  return num_row_to_commit;
 }
 
 HdfsColumnarScanner::ColumnReservations

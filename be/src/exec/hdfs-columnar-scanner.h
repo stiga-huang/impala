@@ -168,6 +168,13 @@ class HdfsColumnarScanner : public HdfsScanner {
   /// row groups / stripes.
   RuntimeProfile::Counter* num_file_metadata_read_;
 
+  /// Timer for materializing rows. This ignores time getting the next buffer and
+  /// evaluating row level runtime filters and predicates.
+  ScopedTimer<MonotonicStopWatch> assemble_rows_timer_;
+
+  /// Time spent in evaluating row level runtime filters and predicates.
+  RuntimeProfile::Counter* eval_row_filter_time_;
+
   /// MemPool counters for the scratch batch
   RuntimeProfile::Counter* scratch_mem_alloc_total_duration_;
   RuntimeProfile::Counter* scratch_mem_alloc_max_duration_;

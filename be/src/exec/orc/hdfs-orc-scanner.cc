@@ -311,9 +311,7 @@ HdfsOrcScanner::HdfsOrcScanner(HdfsScanNodeBase* scan_node, RuntimeState* state)
   : HdfsColumnarScanner(scan_node, state),
     dictionary_pool_(new MemPool(scan_node->mem_tracker())),
     data_batch_pool_(new MemPool(scan_node->mem_tracker())),
-    search_args_pool_(new MemPool(scan_node->mem_tracker())),
-    assemble_rows_timer_(scan_node_->materialize_tuple_timer()) {
-  assemble_rows_timer_.Stop();
+    search_args_pool_(new MemPool(scan_node->mem_tracker())) {
 }
 
 HdfsOrcScanner::~HdfsOrcScanner() {
@@ -1101,10 +1099,15 @@ Status HdfsOrcScanner::AssembleCollection(
     while (num_to_commit < num_rows && tuple_idx < total_tuples) {
       InitTuple(tuple_desc, template_tuple, tuple);
       RETURN_IF_ERROR(coll_reader->ReadChildrenValue(row_idx, tuple_idx++, tuple, pool));
-      if (ExecNode::EvalConjuncts(evals.data(), evals.size(), row)) {
-        tuple = next_tuple(tuple_desc->byte_size(), tuple);
-        ++num_to_commit;
+      assemble_rows_timer_.Stop();
+      {
+        SCOPED_TIMER(eval_row_filter_time_);
+        if (ExecNode::EvalConjuncts(evals.data(), evals.size(), row)) {
+          tuple = next_tuple(tuple_desc->byte_size(), tuple);
+          ++num_to_commit;
+        }
       }
+      assemble_rows_timer_.Start();
     }
     coll_value_builder->CommitTuples(num_to_commit);
   }

@@ -134,6 +134,9 @@ class ScanNode : public ExecNode {
   RuntimeProfile::Counter* materialize_tuple_timer() const {
     return materialize_tuple_timer_;
   }
+  RuntimeProfile::Counter* materialize_collection_timer() const {
+    return materialize_collection_timer_;
+  }
 
   static const std::string SCANNER_THREAD_COUNTERS_PREFIX;
 
@@ -170,6 +173,9 @@ class ScanNode : public ExecNode {
 
   /// Total time writing tuple slots. Used for all types of scans.
   RuntimeProfile::Counter* materialize_tuple_timer_ = nullptr;
+
+  /// Total time writing collection slots.
+  RuntimeProfile::Counter* materialize_collection_timer_ = nullptr;
 
   /// Total number of scan ranges completed. Initialised in subclasses that have a
   /// concept of "scan range", including HDFS and Kudu.

@@ -498,8 +498,8 @@ class HdfsParquetScanner : public HdfsColumnarScanner {
   /// perm_pool_.
   std::unordered_map<const TupleDescriptor*, Tuple*> dict_filter_tuple_map_;
 
-  /// Timer for materializing rows.  This ignores time getting the next buffer.
-  ScopedTimer<MonotonicStopWatch> assemble_rows_timer_;
+  /// Timer for materializing collection slots.
+  ScopedTimer<MonotonicStopWatch> assemble_collections_timer_;
 
   /// Average and min/max time spent processing the page index for each row group.
   RuntimeProfile::SummaryStatsCounter* process_page_index_stats_;
