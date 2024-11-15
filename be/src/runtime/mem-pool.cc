@@ -37,22 +37,25 @@ const int MemPool::DEFAULT_ALIGNMENT;
 uint32_t MemPool::zero_length_region_ alignas(std::max_align_t) = MEM_POOL_POISON;
 
 MemPool::MemPool(MemTracker* mem_tracker, bool enforce_binary_chunk_sizes,
-    MemPoolCounters* counters)
+    MemPoolCounters* counters, bool recyclable)
   : current_chunk_idx_(-1),
     next_chunk_size_(INITIAL_CHUNK_SIZE),
     total_allocated_bytes_(0),
     total_reserved_bytes_(0),
     mem_tracker_(mem_tracker),
     enforce_binary_chunk_sizes_(enforce_binary_chunk_sizes),
+    recyclable_(recyclable),
     counters_(counters) {
   DCHECK(mem_tracker != NULL);
   DCHECK_EQ(zero_length_region_, MEM_POOL_POISON);
 }
 
-MemPool::ChunkInfo::ChunkInfo(int64_t size, uint8_t* buf)
+MemPool::ChunkInfo::ChunkInfo(int64_t size, uint8_t* buf, MemPool* allocator, bool reuse)
   : data(buf),
     size(size),
-    allocated_bytes(0) {
+    allocated_bytes(0),
+    source(allocator),
+    recyclable(reuse) {
 }
 
 MemPool::~MemPool() {
@@ -78,12 +81,22 @@ void MemPool::Clear() {
   DCHECK(CheckIntegrity(false));
 }
 
-void MemPool::FreeAll() {
+void MemPool::FreeAll(bool reuse_mem_chunks) {
   DFAKE_SCOPED_LOCK(mutex_);
   int64_t total_bytes_released = 0;
   MonotonicStopWatch sw;
   sw.Start();
   for (auto& chunk: chunks_) {
+    if (reuse_mem_chunks && chunk.recyclable && chunk.source != nullptr
+        && chunk.source != this) {
+      chunk.allocated_bytes = 0;
+      MemPool* src = chunk.source;
+      mem_tracker_->TransferTo(src->mem_tracker_, chunk.size);
+      src->chunks_.emplace_back(chunk);
+      src->total_reserved_bytes_ += chunk.size;
+      DCHECK(src->CheckIntegrity(false));
+      continue;
+    }
     total_bytes_released += chunk.size;
     free(chunk.data);
     if (counters_) counters_->sys_free_duration.UpdateCounter(sw.Reset());
@@ -151,9 +164,10 @@ bool MemPool::FindChunk(int64_t min_size, bool check_limits) noexcept {
 
   // Put it before the first free chunk. If no free chunks, it goes at the end.
   if (first_free_idx == static_cast<int>(chunks_.size())) {
-    chunks_.push_back(ChunkInfo(chunk_size, buf));
+    chunks_.push_back(ChunkInfo(chunk_size, buf, this, recyclable_));
   } else {
-    chunks_.insert(chunks_.begin() + first_free_idx, ChunkInfo(chunk_size, buf));
+    chunks_.insert(chunks_.begin() + first_free_idx,
+        ChunkInfo(chunk_size, buf, this, recyclable_));
   }
   current_chunk_idx_ = first_free_idx;
   total_reserved_bytes_ += chunk_size;

@@ -68,12 +68,6 @@ PROFILE_DEFINE_COUNTER(IoReadSkippedBytes, DEBUG, TUnit::BYTES,
 PROFILE_DEFINE_COUNTER(NumFileMetadataRead, DEBUG, TUnit::UNIT,
     "The total number of file metadata reads done in place of rows or row groups / "
     "stripe iteration.");
-PROFILE_DEFINE_SUMMARY_STATS_TIMER(ScratchBatchMemAllocDuration, DEBUG,
-    "Stats of time spent in malloc() used by MemPools of the scratch batch.");
-PROFILE_DEFINE_SUMMARY_STATS_TIMER(ScratchBatchMemFreeDuration, DEBUG,
-    "Stats of time spent in free() used by MemPools of the scratch batch.");
-PROFILE_DEFINE_SUMMARY_STATS_COUNTER(ScratchBatchMemAllocBytes, DEBUG, TUnit::BYTES,
-    "Stats of bytes allocated by MemPools of the scratch batch.");
 PROFILE_DEFINE_TIMER(MaterializeCollectionGetMemTime, UNSTABLE, "Wall clock time spent "
     "getting/allocating collection memory. Includes the memcpy duration when doubling "
     "the tuple buffer.");
@@ -84,7 +78,8 @@ HdfsColumnarScanner::HdfsColumnarScanner(HdfsScanNodeBase* scan_node,
     RuntimeState* state) :
     HdfsScanner(scan_node, state),
     scratch_batch_(new ScratchTupleBatch(*scan_node->row_desc(), state_->batch_size(),
-        scan_node->mem_tracker(), &scratch_mem_counters_)) {
+        scan_node->mem_tracker(), &scratch_mem_counters_,
+        (state_->query_options().mt_dop > 0))) {
 }
 
 HdfsColumnarScanner::~HdfsColumnarScanner() {}
@@ -114,15 +109,18 @@ Status HdfsColumnarScanner::Open(ScannerContext* context) {
   io_total_bytes_ = PROFILE_IoReadTotalBytes.Instantiate(profile);
   io_skipped_bytes_ = PROFILE_IoReadSkippedBytes.Instantiate(profile);
   num_file_metadata_read_ = PROFILE_NumFileMetadataRead.Instantiate(profile);
-  scratch_mem_alloc_duration_ = PROFILE_ScratchBatchMemAllocDuration.Instantiate(profile);
-  scratch_mem_free_duration_ = PROFILE_ScratchBatchMemFreeDuration.Instantiate(profile);
-  scratch_mem_alloc_bytes_ = PROFILE_ScratchBatchMemAllocBytes.Instantiate(profile);
   // Only add this counter when there are array/map slots.
   if (!scan_node_->tuple_desc()->collection_slots().empty()) {
     get_collection_mem_timer_ =
         PROFILE_MaterializeCollectionGetMemTime.Instantiate(profile);
   }
   return Status::OK();
+}
+
+void HdfsColumnarScanner::ResetScratchBatchMemPools(shared_ptr<MemPool> shared_tuple_pool,
+    shared_ptr<MemPool> shared_aux_pool) {
+  scratch_batch_->ResetMemPools(shared_tuple_pool, shared_aux_pool);
+  using_scan_node_mem_pools_ = true;
 }
 
 int HdfsColumnarScanner::FilterScratchBatch(RowBatch* dst_batch) {
@@ -337,9 +335,13 @@ void HdfsColumnarScanner::AddSkippedReadBytesCounter(int64_t total_bytes) {
 }
 
 void HdfsColumnarScanner::CloseInternal() {
-  scratch_mem_alloc_duration_->Merge(scratch_mem_counters_.sys_alloc_duration);
-  scratch_mem_free_duration_->Merge(scratch_mem_counters_.sys_free_duration);
-  scratch_mem_alloc_bytes_->Merge(scratch_mem_counters_.allocated_bytes);
+  if (!using_scan_node_mem_pools_) {
+    scan_node_->scratch_mem_alloc_duration()->Merge(
+        scratch_mem_counters_.sys_alloc_duration);
+    scan_node_->scratch_mem_free_duration()->Merge(
+        scratch_mem_counters_.sys_free_duration);
+    scan_node_->scratch_mem_alloc_bytes()->Merge(scratch_mem_counters_.allocated_bytes);
+  }
   HdfsScanner::CloseInternal();
 }
 

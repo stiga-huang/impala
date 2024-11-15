@@ -69,6 +69,9 @@ class HdfsScanNodeMt : public HdfsScanNodeBase {
   io::ScanRange* scan_range_;
   boost::scoped_ptr<ScannerContext> scanner_ctx_;
   boost::scoped_ptr<HdfsScanner> scanner_;
+  std::shared_ptr<MemPool> scratch_batch_tuple_mem_pool_;
+  std::shared_ptr<MemPool> scratch_batch_aux_mem_pool_;
+  MemPoolCounters mem_pool_counters_;
 };
 
 }

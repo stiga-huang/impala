@@ -129,7 +129,7 @@ class MemPool {
   /// If 'enforce_binary_chunk_sizes' is set to true then all chunk sizes
   /// allocated will be rounded up to the next power of two.
   MemPool(MemTracker* mem_tracker, bool enforce_binary_chunk_sizes = false,
-      MemPoolCounters* counters = nullptr);
+      MemPoolCounters* counters = nullptr, bool recyclable = false);
 
   /// Frees all chunks of memory and subtracts the total allocated bytes
   /// from the registered limits.
@@ -194,7 +194,7 @@ class MemPool {
 
   /// Deletes all allocated chunks. FreeAll() or AcquireData() must be called for
   /// each mem pool
-  void FreeAll();
+  void FreeAll(bool reuse_mem_chunks=true);
 
   /// Absorb all chunks that hold data from src. If keep_current is true, let src hold on
   /// to its last allocated chunk that contains data.
@@ -235,7 +235,12 @@ class MemPool {
     /// bytes allocated via Allocate() in this chunk
     int64_t allocated_bytes;
 
-    explicit ChunkInfo(int64_t size, uint8_t* buf);
+    /// The source MemPool that allocates this chunk
+    MemPool* source = nullptr;
+    /// Marker for whether this chunk can be safely returned to the source MemPool
+    bool recyclable = false;
+
+    explicit ChunkInfo(int64_t size, uint8_t* buf, MemPool* allocator, bool reuse);
 
     ChunkInfo()
       : data(NULL),
@@ -277,6 +282,10 @@ class MemPool {
   /// If set to true, all chunk sizes allocated will be rounded up to the next power of
   /// two.
   const bool enforce_binary_chunk_sizes_;
+
+  /// Marks whether chunks allocated by this MemPool can be safely recycled to save
+  /// memory allocations.
+  bool recyclable_ = false;
 
   MemPoolCounters* counters_;
 

@@ -1032,7 +1032,7 @@ Status HdfsOrcScanner::TransferTuples(RowBatch* dst_batch) {
     RETURN_IF_ERROR(scratch_batch_->Reset(state_));
     InitTupleBuffer(template_tuple_, scratch_batch_->tuple_mem, scratch_batch_->capacity);
     RETURN_IF_ERROR(orc_root_reader_->TopLevelReadValueBatch(scratch_batch_.get(),
-        &scratch_batch_->aux_mem_pool));
+        scratch_batch_->aux_mem_pool.get()));
     int num_tuples_transferred = TransferScratchTuples(dst_batch);
     row_id += num_tuples_transferred;
     VLOG_ROW << Substitute("Transfer $0 rows from scratch batch to dst_batch ($1 rows)",

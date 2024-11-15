@@ -152,6 +152,12 @@ PROFILE_DEFINE_COUNTER(DataCacheHitBytes, STABLE_HIGH, TUnit::BYTES,
     "Total bytes of data cache hit");
 PROFILE_DEFINE_COUNTER(DataCacheMissBytes, STABLE_HIGH, TUnit::BYTES,
     "Total bytes of data cache miss");
+PROFILE_DEFINE_SUMMARY_STATS_TIMER(ScratchBatchMemAllocDuration, DEBUG,
+    "Stats of time spent in malloc() used by MemPools of the scratch batch.");
+PROFILE_DEFINE_SUMMARY_STATS_TIMER(ScratchBatchMemFreeDuration, DEBUG,
+    "Stats of time spent in free() used by MemPools of the scratch batch.");
+PROFILE_DEFINE_SUMMARY_STATS_COUNTER(ScratchBatchMemAllocBytes, DEBUG, TUnit::BYTES,
+    "Stats of bytes allocated by MemPools of the scratch batch.");
 
 const string HdfsScanNodeBase::HDFS_SPLIT_STATS_DESC =
     "Hdfs split stats (<volume id>:<# splits>/<split lengths>)";
@@ -667,6 +673,14 @@ Status HdfsScanNodeBase::Open(RuntimeState* state) {
   hdfs_read_thread_concurrency_bucket_ = runtime_profile()->AddBucketingCounters(
       &active_hdfs_read_thread_counter_,
       ExecEnv::GetInstance()->disk_io_mgr()->num_total_disks() + 1);
+
+  // TODO: only add these for columnar formats
+  scratch_mem_alloc_duration_ =
+      PROFILE_ScratchBatchMemAllocDuration.Instantiate(runtime_profile());
+  scratch_mem_free_duration_ =
+      PROFILE_ScratchBatchMemFreeDuration.Instantiate(runtime_profile());
+  scratch_mem_alloc_bytes_ =
+      PROFILE_ScratchBatchMemAllocBytes.Instantiate(runtime_profile());
 
   counters_running_ = true;
   return Status::OK();

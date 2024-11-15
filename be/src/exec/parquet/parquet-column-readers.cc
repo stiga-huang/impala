@@ -1134,7 +1134,7 @@ Status BaseScalarColumnReader::ReadDataPage() {
   // We're about to move to the next data page. The previous data page is
   // now complete, free up any memory allocated for it. If the data page contained
   // strings we need to attach it to the returned batch.
-  col_chunk_reader_.ReleaseResourcesOfLastPage(parent_->scratch_batch_->aux_mem_pool);
+  col_chunk_reader_.ReleaseResourcesOfLastPage(*parent_->scratch_batch_->aux_mem_pool);
 
   DCHECK_EQ(num_buffered_values_, 0);
   if ((DoesPageFiltering() &&
@@ -1173,7 +1173,7 @@ Status BaseScalarColumnReader::ReadNextDataPageHeader() {
   // We're about to move to the next data page. The previous data page is
   // now complete, free up any memory allocated for it. If the data page contained
   // strings we need to attach it to the returned batch.
-  col_chunk_reader_.ReleaseResourcesOfLastPage(parent_->scratch_batch_->aux_mem_pool);
+  col_chunk_reader_.ReleaseResourcesOfLastPage(*parent_->scratch_batch_->aux_mem_pool);
 
   DCHECK_EQ(num_buffered_values_, 0);
   if ((DoesPageFiltering() && candidate_page_idx_ == candidate_data_pages_.size() - 1)

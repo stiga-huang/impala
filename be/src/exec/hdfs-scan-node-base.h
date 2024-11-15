@@ -488,6 +488,16 @@ class HdfsScanNodeBase : public ScanNode {
     return scanner_io_wait_time_;
   }
 
+  RuntimeProfile::SummaryStatsCounter* scratch_mem_alloc_duration() {
+    return scratch_mem_alloc_duration_;
+  }
+  RuntimeProfile::SummaryStatsCounter* scratch_mem_alloc_bytes() {
+    return scratch_mem_alloc_bytes_;
+  }
+  RuntimeProfile::SummaryStatsCounter* scratch_mem_free_duration() {
+    return scratch_mem_free_duration_;
+  }
+
   const static int SKIP_COLUMN = -1;
 
   /// Returns index into materialized_slots with 'path'.  Returns SKIP_COLUMN if
@@ -796,6 +806,11 @@ class HdfsScanNodeBase : public ScanNode {
 
   /// Pool for allocating memory for Iceberg partition filtering.
   boost::scoped_ptr<MemPool> iceberg_partition_filtering_pool_;
+
+  /// MemPool counters for the scratch batch
+  RuntimeProfile::SummaryStatsCounter* scratch_mem_alloc_duration_;
+  RuntimeProfile::SummaryStatsCounter* scratch_mem_free_duration_;
+  RuntimeProfile::SummaryStatsCounter* scratch_mem_alloc_bytes_;
 
   /// Status of failed operations.  This is set in the ScannerThreads
   /// Returned in GetNext() if an error occurred.  An non-ok status triggers cleanup

@@ -460,7 +460,7 @@ Status FragmentInstanceState::ExecInternal() {
   // Release resources from final row batch.
   {
     SCOPED_TIMER(batch_reset_timer);
-    row_batch_->Reset();
+    row_batch_->Reset(/*reuse_mem_chunks*/false);
   }
   UpdateState(StateEvent::LAST_BATCH_SENT);
 

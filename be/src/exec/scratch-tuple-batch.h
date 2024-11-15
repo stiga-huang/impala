@@ -61,14 +61,14 @@ struct ScratchTupleBatch {
   const int tuple_byte_size;
 
   // Pool used to allocate 'tuple_mem' and nothing else.
-  MemPool tuple_mem_pool;
+  std::shared_ptr<MemPool> tuple_mem_pool;
 
   // Pool used to accumulate other memory that may be referenced by var-len slots in this
   // batch, e.g. decompression buffers, allocations for var-len strings and allocations
   // for nested arrays. This memory may be referenced by previous batches or the current
   // batch, but not by future batches. E.g. a decompression buffer can be safely attached
   // only once all values referencing that buffer have been materialized into the batch.
-  MemPool aux_mem_pool;
+  std::shared_ptr<MemPool> aux_mem_pool;
 
   // Tuples transferred to an output row batch are compacted if
   // (# tuples materialized / # tuples returned) exceeds this number. Chosen so that the
@@ -83,11 +83,11 @@ struct ScratchTupleBatch {
 
   ScratchTupleBatch(
       const RowDescriptor& row_desc, int batch_size, MemTracker* mem_tracker,
-      MemPoolCounters* counters = nullptr)
+      MemPoolCounters* counters = nullptr, bool reuse_mem_chunks=false)
     : capacity(batch_size),
       tuple_byte_size(row_desc.GetRowSize()),
-      tuple_mem_pool(mem_tracker, false, counters),
-      aux_mem_pool(mem_tracker, false, counters),
+      tuple_mem_pool(new MemPool(mem_tracker, false, counters, reuse_mem_chunks)),
+      aux_mem_pool(new MemPool(mem_tracker, false, counters, reuse_mem_chunks)),
       selected_rows(new bool[batch_size]) {
     DCHECK_EQ(row_desc.tuple_descriptors().size(), 1);
   }
@@ -99,20 +99,26 @@ struct ScratchTupleBatch {
     if (tuple_mem == nullptr) {
       int64_t dummy;
       RETURN_IF_ERROR(RowBatch::ResizeAndAllocateTupleBuffer(
-          state, &tuple_mem_pool, tuple_byte_size, &capacity, &dummy, &tuple_mem));
+          state, tuple_mem_pool.get(), tuple_byte_size, &capacity, &dummy, &tuple_mem));
     }
     return Status::OK();
+  }
+
+  void ResetMemPools(std::shared_ptr<MemPool> shared_tuple_pool,
+      std::shared_ptr<MemPool> shared_aux_pool) {
+    tuple_mem_pool =shared_tuple_pool;
+    aux_mem_pool = shared_aux_pool;
   }
 
   /// Release all memory in the MemPools. If 'dst_pool' is non-NULL, transfers it to
   /// 'dst_pool'. Otherwise frees the memory.
   void ReleaseResources(MemPool* dst_pool) {
     if (dst_pool == nullptr) {
-      tuple_mem_pool.FreeAll();
-      aux_mem_pool.FreeAll();
+      tuple_mem_pool->FreeAll();
+      aux_mem_pool->FreeAll();
     } else {
-      dst_pool->AcquireData(&tuple_mem_pool, false);
-      dst_pool->AcquireData(&aux_mem_pool, false);
+      dst_pool->AcquireData(tuple_mem_pool.get(), false);
+      dst_pool->AcquireData(aux_mem_pool.get(), false);
     }
     tuple_mem = nullptr;
   }
@@ -133,7 +139,7 @@ struct ScratchTupleBatch {
 
     // Future tuples won't reference data in 'aux_mem_pool' - always transfer so that
     // we don't accumulate unneeded memory in the scratch batch.
-    dst_batch->tuple_data_pool()->AcquireData(&aux_mem_pool, false);
+    dst_batch->tuple_data_pool()->AcquireData(aux_mem_pool.get(), false);
 
     // Try to avoid the transfer of 'tuple_mem' for selective scans by compacting the
     // output batch. This avoids excessive allocation and transfer of memory, which
@@ -144,7 +150,7 @@ struct ScratchTupleBatch {
         || num_tuples_transferred * MIN_SELECTIVITY_TO_COMPACT > num_tuples
         || !TryCompact(dst_batch, num_to_commit)) {
       // Didn't compact - rows in 'dst_batch' reference 'tuple_mem'.
-      dst_batch->tuple_data_pool()->AcquireData(&tuple_mem_pool, false);
+      dst_batch->tuple_data_pool()->AcquireData(tuple_mem_pool.get(), false);
       tuple_mem = nullptr;
     }
   }
@@ -227,7 +233,7 @@ struct ScratchTupleBatch {
   uint8_t* TupleEnd() const { return tuple_mem + num_tuples * tuple_byte_size; }
   bool AtEnd() const { return tuple_idx == num_tuples; }
   int64_t total_allocated_bytes() const {
-    return tuple_mem_pool.total_allocated_bytes() + aux_mem_pool.total_allocated_bytes();
+    return tuple_mem_pool->total_allocated_bytes() + aux_mem_pool->total_allocated_bytes();
   }
 };
 }

@@ -242,7 +242,7 @@ class RowBatch {
   int num_buffers() const { return buffers_.size(); }
 
   /// Resets the row batch, returning all resources it has accumulated.
-  void Reset();
+  void Reset(bool reuse_mem_chunks=true);
 
   /// Adds a buffer to this row batch. The buffer is deleted when freeing resources.
   /// The buffer's memory remains accounted against the original owner, even when the

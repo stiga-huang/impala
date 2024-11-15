@@ -19,17 +19,18 @@
 
 #include <sstream>
 
-#include "exec/exec-node-util.h"
-#include "exec/scanner-context.h"
-#include "runtime/runtime-state.h"
-#include "runtime/row-batch.h"
-#include "runtime/exec-env.h"
-#include "util/debug-util.h"
-#include "util/runtime-profile-counters.h"
 
-#include "gen-cpp/PlanNodes_types.h"
 
 #include "common/names.h"
+#include "exec/exec-node-util.h"
+#include "exec/scanner-context.h"
+#include "exec/parquet/hdfs-parquet-scanner.h"
+#include "gen-cpp/PlanNodes_types.h"
+#include "runtime/exec-env.h"
+#include "runtime/row-batch.h"
+#include "runtime/runtime-state.h"
+#include "util/debug-util.h"
+#include "util/runtime-profile-counters.h"
 
 using namespace impala::io;
 
@@ -38,8 +39,10 @@ namespace impala {
 HdfsScanNodeMt::HdfsScanNodeMt(
     ObjectPool* pool, const HdfsScanPlanNode& pnode, const DescriptorTbl& descs)
   : HdfsScanNodeBase(pool, pnode, pnode.tnode_->hdfs_scan_node, descs),
-    scan_range_(NULL),
-    scanner_(NULL) {}
+    scan_range_(nullptr),
+    scanner_(nullptr),
+    scratch_batch_tuple_mem_pool_(nullptr),
+    scratch_batch_aux_mem_pool_(nullptr) {}
 
 HdfsScanNodeMt::~HdfsScanNodeMt() {
 }
@@ -58,6 +61,10 @@ Status HdfsScanNodeMt::Open(RuntimeState* state) {
   if (!deterministic_scanrange_assignment_) {
     shared_state_->AddCancellationHook(state);
   }
+  scratch_batch_tuple_mem_pool_.reset(
+      new MemPool(mem_tracker(), false, &mem_pool_counters_, true));
+  scratch_batch_aux_mem_pool_.reset(
+      new MemPool(mem_tracker(), false, &mem_pool_counters_, true));
   RETURN_IF_ERROR(IssueInitialScanRanges(state));
   return Status::OK();
 }
@@ -135,6 +142,14 @@ Status HdfsScanNodeMt::CreateAndOpenScanner(HdfsPartitionDescriptor* partition,
   if (!status.ok() && scanner->get() != nullptr) {
     scanner->get()->Close(nullptr);
     scanner->reset();
+  } else if (scanner->get() != nullptr) {
+    // TODO: add Iceberg and ORC cases
+    if (partition->file_format() == THdfsFileFormat::PARQUET) {
+      auto* s = (HdfsParquetScanner*) scanner->get();
+      s->ResetScratchBatchMemPools(scratch_batch_tuple_mem_pool_,
+          scratch_batch_aux_mem_pool_);
+      VLOG_QUERY << "Reusing ScanNode MemPools in the scanner";
+    }
   }
   return status;
 }
@@ -144,6 +159,11 @@ void HdfsScanNodeMt::Close(RuntimeState* state) {
   if (scanner_.get() != nullptr) scanner_->Close(nullptr);
   scanner_.reset();
   scanner_ctx_.reset();
+  scratch_batch_tuple_mem_pool_->FreeAll(false);
+  scratch_batch_aux_mem_pool_->FreeAll(false);
+  scratch_mem_alloc_duration_->Merge(mem_pool_counters_.sys_alloc_duration);
+  scratch_mem_alloc_bytes_->Merge(mem_pool_counters_.allocated_bytes);
+  scratch_mem_free_duration_->Merge(mem_pool_counters_.sys_free_duration);
   HdfsScanNodeBase::Close(state);
 }
 

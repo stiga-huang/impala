@@ -362,10 +362,10 @@ void RowBatch::FreeBuffers() {
   buffers_.clear();
 }
 
-void RowBatch::Reset() {
+void RowBatch::Reset(bool reuse_mem_chunks) {
   num_rows_ = 0;
   capacity_ = tuple_ptrs_size_ / (num_tuples_per_row_ * sizeof(Tuple*));
-  tuple_data_pool_.FreeAll();
+  tuple_data_pool_.FreeAll(reuse_mem_chunks);
   FreeBuffers();
   attached_buffer_bytes_ = 0;
   flush_mode_ = FlushMode::NO_FLUSH_RESOURCES;

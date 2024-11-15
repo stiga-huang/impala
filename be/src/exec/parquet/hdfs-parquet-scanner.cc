@@ -2300,12 +2300,12 @@ Status HdfsParquetScanner::AssembleRowsWithoutLateMaterialization(
       ParquetColumnReader* col_reader = column_readers[c];
       bool continue_execution;
       if (col_reader->max_rep_level() > 0) {
-        continue_execution = col_reader->ReadValueBatch(&scratch_batch_->aux_mem_pool,
+        continue_execution = col_reader->ReadValueBatch(scratch_batch_->aux_mem_pool.get(),
             scratch_batch_->capacity, tuple_byte_size_, scratch_batch_->tuple_mem,
             &scratch_batch_->num_tuples);
       } else {
         continue_execution = col_reader->ReadNonRepeatedValueBatch(
-            &scratch_batch_->aux_mem_pool, scratch_batch_->capacity, tuple_byte_size_,
+            scratch_batch_->aux_mem_pool.get(), scratch_batch_->capacity, tuple_byte_size_,
             scratch_batch_->tuple_mem, &scratch_batch_->num_tuples);
       }
       // Check that all column readers populated the same number of values.
@@ -2536,11 +2536,11 @@ Status HdfsParquetScanner::FillScratchMicroBatches(
       uint8_t* next_tuple_mem = scratch_batch_->tuple_mem
           + (scratch_batch_->tuple_byte_size * micro_batches[r].start);
       if (col_reader->max_rep_level() > 0) {
-        continue_execution = col_reader->ReadValueBatch(&scratch_batch_->aux_mem_pool,
+        continue_execution = col_reader->ReadValueBatch(scratch_batch_->aux_mem_pool.get(),
             micro_batches[r].length, tuple_byte_size_, next_tuple_mem, num_tuples);
       } else {
         continue_execution =
-            col_reader->ReadNonRepeatedValueBatch(&scratch_batch_->aux_mem_pool,
+            col_reader->ReadNonRepeatedValueBatch(scratch_batch_->aux_mem_pool.get(),
                 micro_batches[r].length, tuple_byte_size_, next_tuple_mem, num_tuples);
       }
       last = micro_batches[r].end;

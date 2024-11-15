@@ -55,12 +55,16 @@ class HdfsColumnarScanner : public HdfsScanner {
   /// Add skipped bytes related counters.
   void AddSkippedReadBytesCounter(int64_t total_bytes);
 
+  void ResetScratchBatchMemPools(std::shared_ptr<MemPool> shared_tuple_pool,
+      std::shared_ptr<MemPool> shared_aux_pool);
+
   /// Class name in LLVM IR.
   static const char* LLVM_CLASS_NAME;
 
  protected:
   /// MemPool counters for scratch batch
   MemPoolCounters scratch_mem_counters_;
+  bool using_scan_node_mem_pools_ = false;
 
   /// Column readers will write slot values into this scratch batch for
   /// top-level tuples. See AssembleRows() in the derived classes.
@@ -168,10 +172,6 @@ class HdfsColumnarScanner : public HdfsScanner {
   /// row groups / stripes.
   RuntimeProfile::Counter* num_file_metadata_read_;
 
-  /// MemPool counters for the scratch batch
-  RuntimeProfile::SummaryStatsCounter* scratch_mem_alloc_duration_;
-  RuntimeProfile::SummaryStatsCounter* scratch_mem_free_duration_;
-  RuntimeProfile::SummaryStatsCounter* scratch_mem_alloc_bytes_;
 
   /// Time spent in allocating collection memory and copying memory in doubling
   /// the tuple buffer
