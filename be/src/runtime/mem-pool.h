@@ -29,11 +29,18 @@
 #include "common/logging.h"
 #include "gutil/dynamic_annotations.h"
 #include "gutil/threading/thread_collision_warner.h"
+#include "runtime/bufferpool/buffer-pool.h"
 #include "util/bit-util.h"
 
 namespace impala {
 
 class MemTracker;
+class RowBatch;
+
+struct BufferInfo {
+  BufferPool::ClientHandle* client = nullptr;
+  BufferPool::BufferHandle buffer;
+};
 
 /// Similar to SummaryStatsCounter without thread-safe support so don't need
 /// to acquire locks.
@@ -130,7 +137,9 @@ class MemPool {
   /// 'tracker' tracks the amount of memory allocated by this pool. Must not be NULL.
   /// If 'enforce_binary_chunk_sizes' is set to true then all chunk sizes
   /// allocated will be rounded up to the next power of two.
-  MemPool(MemTracker* mem_tracker, bool enforce_binary_chunk_sizes = false);
+  explicit MemPool(MemTracker* mem_tracker, bool enforce_binary_chunk_sizes = false);
+
+  explicit MemPool(BufferPool::ClientHandle* client);
 
   /// Frees all chunks of memory and subtracts the total allocated bytes
   /// from the registered limits.
@@ -216,6 +225,8 @@ class MemPool {
 
   MemPoolCounters GetMemPoolCounters() const { return counters_; }
 
+  int64_t GetUsedReservation() const;
+
   /// TODO: make a macro for doing this
   /// For C++/IR interop, we need to be able to look up types by name.
   static const char* LLVM_CLASS_NAME;
@@ -237,6 +248,10 @@ class MemPool {
 
     /// bytes allocated via Allocate() in this chunk
     int64_t allocated_bytes;
+
+    /// Index of the BufferPool buffer backing this chunk in 'buffers_'.
+    /// Valid iff this chunk is allocated from BufferPool.
+    int buffer_idx = -1;
 
     explicit ChunkInfo(int64_t size, uint8_t* buf);
 
@@ -271,6 +286,9 @@ class MemPool {
   /// sum of all bytes allocated in chunks_
   int64_t total_reserved_bytes_;
 
+  /// sum of all bytes allocated in chunks_ from malloc()
+  int64_t total_reserved_bytes_from_malloc_;
+
   std::vector<ChunkInfo> chunks_;
 
   /// The current and peak memory footprint of this pool. This is different from
@@ -281,6 +299,13 @@ class MemPool {
   /// two.
   const bool enforce_binary_chunk_sizes_;
 
+  /// Whether memory allocation is handled by BufferPool
+  const bool backed_by_buffer_pool_;
+  BufferPool::ClientHandle* bp_client_ = nullptr;
+
+  /// BufferInfo for buffers allocated from BufferPool
+  std::vector<BufferInfo> buffers_;
+
   MemPoolCounters counters_;
 
   /// Find or allocated a chunk with at least min_size spare capacity and update
@@ -289,6 +314,9 @@ class MemPool {
   /// If check_limits is true, this call can fail (returns false) if adding a
   /// new chunk exceeds the mem limits.
   bool FindChunk(int64_t min_size, bool check_limits) noexcept;
+
+  /// Util method to insert a new chunk after allocation
+  void InsertChunk(int first_free_idx, int64_t chunk_size, uint8_t* buf);
 
   /// Check integrity of the supporting data structures; always returns true but DCHECKs
   /// all invariants.

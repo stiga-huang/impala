@@ -107,6 +107,7 @@ HdfsParquetScanner::HdfsParquetScanner(HdfsScanNodeBase* scan_node, RuntimeState
     advance_row_group_(true),
     min_max_tuple_(nullptr),
     row_batches_produced_(0),
+    // TODO: Use BufferPool?
     dictionary_pool_(new MemPool(scan_node->mem_tracker())),
     stats_batch_read_pool_(new MemPool(scan_node->mem_tracker())),
     assemble_rows_timer_(scan_node_->materialize_tuple_timer()),
@@ -449,6 +450,7 @@ Status HdfsParquetScanner::ProcessSplit() {
         state_->batch_size(), scan_node_->mem_tracker());
     if (scan_node_->is_partition_key_scan()) batch->limit_capacity(1);
     Status status = GetNextInternal(batch.get());
+    used_reservation_in_output_batch_ += batch->GetUsedReservation();
 
     // If we are doing a partition key scan, we are done scanning the file after
     // returning at least one row.
@@ -3075,8 +3077,18 @@ Status HdfsParquetScanner::InitScalarColumns(int64_t row_group_first_row) {
   // Used to validate that the number of values in each reader in column_readers_ at the
   // same SchemaElement is the same.
   unordered_map<const parquet::SchemaElement*, int> num_values_map;
+  int64_t uncompressed_pages_reservation = 0;
+  int64_t min_buffer_len = ExecEnv::GetInstance()->buffer_pool()->min_buffer_len();
   for (BaseScalarColumnReader* scalar_reader : scalar_readers_) {
     const parquet::ColumnChunk& col_chunk = row_group.columns[scalar_reader->col_idx()];
+    // If decompression is needed, increase the reservation for allocating uncompressed
+    // data pages.
+    if (state_->query_options().mt_dop > 0 &&
+        col_chunk.meta_data.total_uncompressed_size >
+            col_chunk.meta_data.total_compressed_size) {
+      uncompressed_pages_reservation += max(min_buffer_len,
+        BitUtil::RoundUpToPowerOfTwo(col_chunk.meta_data.total_uncompressed_size));
+    }
     auto num_values_it = num_values_map.find(&scalar_reader->schema_element());
     int num_values = -1;
     if (num_values_it != num_values_map.end()) {
@@ -3093,6 +3105,7 @@ Status HdfsParquetScanner::InitScalarColumns(int64_t row_group_first_row) {
     RETURN_IF_ERROR(scalar_reader->Reset(*file_desc, col_chunk, row_group_idx_,
         row_group_first_row));
   }
+  VLOG_QUERY << "uncompressed_pages_reservation=" << uncompressed_pages_reservation;
 
   ColumnRangeLengths col_range_lengths(scalar_readers_.size());
   for (int i = 0; i < scalar_readers_.size(); ++i) {
@@ -3100,8 +3113,8 @@ Status HdfsParquetScanner::InitScalarColumns(int64_t row_group_first_row) {
   }
 
   ColumnReservations reservation_per_column;
-  RETURN_IF_ERROR(
-      DivideReservationBetweenColumns(col_range_lengths, reservation_per_column));
+  RETURN_IF_ERROR(DivideReservationBetweenColumns(
+      col_range_lengths, reservation_per_column, uncompressed_pages_reservation));
   for (auto& col_reservation : reservation_per_column) {
     scalar_readers_[col_reservation.first]->set_io_reservation(col_reservation.second);
   }

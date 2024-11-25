@@ -92,6 +92,16 @@ struct ScratchTupleBatch {
     DCHECK_EQ(row_desc.tuple_descriptors().size(), 1);
   }
 
+  ScratchTupleBatch(
+      const RowDescriptor& row_desc, int batch_size, BufferPool::ClientHandle* bp_client)
+    : capacity(batch_size),
+      tuple_byte_size(row_desc.GetRowSize()),
+      tuple_mem_pool(bp_client),
+      aux_mem_pool(bp_client),
+      selected_rows(new bool[batch_size]) {
+    DCHECK_EQ(row_desc.tuple_descriptors().size(), 1);
+  }
+
   Status Reset(RuntimeState* state) {
     tuple_idx = 0;
     num_tuples = 0;

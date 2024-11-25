@@ -44,8 +44,7 @@ class RequestContext;
 class ScanRange;
 
 /// Buffer struct that is used by the caller and IoMgr to pass read buffers.
-/// It is is expected that only one thread has ownership of this object at a
-/// time.
+/// It is expected that only one thread has ownership of this object at a time.
 class BufferDescriptor {
  public:
   /// Create a buffer descriptor allocated from the buffer pool. Public to

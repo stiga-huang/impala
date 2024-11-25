@@ -386,7 +386,10 @@ void ReservationTracker::AllocateFrom(int64_t bytes) {
 void ReservationTracker::AllocateFromLocked(int64_t bytes) {
   DCHECK(initialized_);
   DCHECK_GE(bytes, 0);
-  DCHECK_LE(bytes, unused_reservation());
+  DCHECK_LE(bytes, unused_reservation())
+      << "reservation=" << reservation_.Load()
+      << ", used_reservation=" << used_reservation_.Load()
+      << ", child_reservations=" << child_reservations_.Load();
   UpdateUsedReservation(bytes);
   CheckConsistency();
 }
@@ -447,12 +450,14 @@ void ReservationTracker::CheckConsistency() const {
 }
 
 void ReservationTracker::UpdateUsedReservation(int64_t delta) {
+  if (delta == 0) return;
   int64_t used_reservation = used_reservation_.Add(delta);
   COUNTER_SET(counters_.peak_used_reservation, used_reservation);
   CheckConsistency();
 }
 
 void ReservationTracker::UpdateReservation(int64_t delta) {
+  if (delta == 0) return;
   int64_t reservation = reservation_.Add(delta);
   COUNTER_SET(counters_.peak_reservation, reservation);
   CheckConsistency();

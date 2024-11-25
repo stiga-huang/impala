@@ -88,8 +88,14 @@ const char* HdfsColumnarScanner::LLVM_CLASS_NAME = "class.impala::HdfsColumnarSc
 HdfsColumnarScanner::HdfsColumnarScanner(HdfsScanNodeBase* scan_node,
     RuntimeState* state) :
     HdfsScanner(scan_node, state),
-    scratch_batch_(new ScratchTupleBatch(
-        *scan_node->row_desc(), state_->batch_size(), scan_node->mem_tracker())) {
+    bp_client_(scan_node->buffer_pool_client()) {
+  if (state->query_options().mt_dop > 0) {
+    scratch_batch_.reset(new ScratchTupleBatch(
+        *scan_node->row_desc(), state_->batch_size(), bp_client_));
+  } else {
+    scratch_batch_.reset(new ScratchTupleBatch(
+        *scan_node->row_desc(), state_->batch_size(), scan_node->mem_tracker()));
+  }
 }
 
 HdfsColumnarScanner::~HdfsColumnarScanner() {}
@@ -292,7 +298,7 @@ int64_t HdfsColumnarScanner::ComputeIdealReservation(
 
 Status HdfsColumnarScanner::DivideReservationBetweenColumns(
     const ColumnRangeLengths& col_range_lengths,
-    ColumnReservations& reservation_per_column) {
+    ColumnReservations& reservation_per_column, int64_t extra_required_reservation) {
   io::DiskIoMgr* io_mgr = ExecEnv::GetInstance()->disk_io_mgr();
   const int64_t min_buffer_size = io_mgr->min_buffer_size();
   const int64_t max_buffer_size = io_mgr->max_buffer_size();
@@ -310,7 +316,10 @@ Status HdfsColumnarScanner::DivideReservationBetweenColumns(
   // its own stream. We can use the total reservation now that 'stream_''s resources have
   // been released. We may benefit from increasing reservation further, so let's compute
   // the ideal reservation to scan all the columns.
-  int64_t ideal_reservation = ComputeIdealReservation(col_range_lengths);
+  int64_t ideal_io_reservation = ComputeIdealReservation(col_range_lengths);
+  int64_t ideal_reservation = ideal_io_reservation + extra_required_reservation +
+      bp_client_->GetUsedReservation();
+  VLOG_QUERY << "ideal_reservation=" << ideal_io_reservation << ", total_reservation=" << context_->total_reservation();
   if (ideal_reservation > context_->total_reservation()) {
     context_->TryIncreaseReservation(ideal_reservation);
   }
@@ -318,8 +327,12 @@ Status HdfsColumnarScanner::DivideReservationBetweenColumns(
       context_->total_reservation());
   columnar_scanner_ideal_reservation_counter_->UpdateCounter(ideal_reservation);
 
+  int64_t reservation_to_distribute = min(ideal_io_reservation, context_->total_reservation());
+  reservation_to_distribute = max(reservation_to_distribute,
+      context_->total_reservation() - extra_required_reservation - bp_client_->GetUsedReservation());
+  VLOG_QUERY << "reservation_to_distribute=" << reservation_to_distribute << ", total_reservation=" << context_->total_reservation();
   reservation_per_column = DivideReservationBetweenColumnsHelper(
-      min_buffer_size, max_buffer_size, col_range_lengths, context_->total_reservation());
+      min_buffer_size, max_buffer_size, col_range_lengths, reservation_to_distribute);
   return Status::OK();
 }
 

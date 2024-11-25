@@ -2506,8 +2506,19 @@ public class HdfsScanNode extends ScanNode {
         Math.max(1, columnReservations.size()) : 1;
     long maxReservationBytes =
         roundUpToIoBuffer(largestScanRangeBytes_, maxIoBufferSize);
-    return Math.max(iomgrScanRangesPerSplit * BackendConfig.INSTANCE.getMinBufferSize(),
+    long ioReservationBytes = Math.max(
+        iomgrScanRangesPerSplit * BackendConfig.INSTANCE.getMinBufferSize(),
         Math.min(reservationBytes, maxReservationBytes));
+    // Reserve memory for allocating tuple memory on BufferPool.
+    // TODO: reserve memory for uncompressed data pages. Currently it's one in runtime.
+    //  See HdfsParquetScanner::InitScalarColumns().
+    long tupleReservationBytes = 0;
+    if (queryOptions.mt_dop > 0 && (hasParquet(fileFormats_) || hasOrc(fileFormats_))) {
+      tupleReservationBytes = (long) (avgRowSize_ * getRowBatchSize(queryOptions));
+    }
+    LOG.info("ioReservationBytes={}, tupleReservationBytes={}", ioReservationBytes,
+        tupleReservationBytes);
+    return ioReservationBytes + tupleReservationBytes;
   }
 
   /**

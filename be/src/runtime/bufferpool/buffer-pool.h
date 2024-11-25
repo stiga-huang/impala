@@ -454,7 +454,7 @@ class BufferPool::SubReservation {
 class BufferPool::BufferHandle {
  public:
   BufferHandle() { Reset(); }
-  ~BufferHandle() { DCHECK(!is_open()); }
+  ~BufferHandle() { DCHECK(!is_open()) << DebugString(); }
 
   /// Allow move construction of handles to support std::move(). Inline to make moving
   /// efficient.

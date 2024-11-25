@@ -354,6 +354,10 @@ class HdfsParquetScanner : public HdfsColumnarScanner {
     return THdfsFileFormat::PARQUET;
   }
 
+  int64_t GetUsedReservationInRowBatch() const override {
+    return used_reservation_in_output_batch_;
+  }
+
   /// Helper function to create ColumnStatsReader object. 'col_order' might be NULL.
   ColumnStatsReader CreateColumnStatsReader(
       const parquet::ColumnChunk& col_chunk, const ColumnType& col_type,
@@ -585,6 +589,8 @@ class HdfsParquetScanner : public HdfsColumnarScanner {
   /// survive after filtering and call it micro batch. This represents a micro batch
   /// that spans entire batch of length 'scratch_batch_->capacity'.
   ScratchMicroBatch complete_micro_batch_;
+
+  int64_t used_reservation_in_output_batch_ = 0;
 
   virtual Status GetNextInternal(RowBatch* row_batch) override WARN_UNUSED_RESULT;
 

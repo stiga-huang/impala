@@ -374,6 +374,7 @@ void RowBatch::Reset() {
 
 void RowBatch::TransferResourceOwnership(RowBatch* dest) {
   dest->tuple_data_pool_.AcquireData(&tuple_data_pool_, false);
+  // TODO: transfer used reservation to the current node?
   for (BufferInfo& buffer_info : buffers_) {
     dest->AddBuffer(
         buffer_info.client, std::move(buffer_info.buffer), FlushMode::NO_FLUSH_RESOURCES);
@@ -528,4 +529,11 @@ void RowBatch::CopyRows(RowBatch* src, int num_rows, int src_offset, int dst_off
   }
 }
 
+int64_t RowBatch::GetUsedReservation() const {
+  int64_t reservation = 0;
+  for (const auto& b : buffers_) {
+    if (b.buffer.is_open()) reservation += b.buffer.len();
+  }
+  return reservation + tuple_data_pool_.GetUsedReservation();
+}
 } // namespace impala

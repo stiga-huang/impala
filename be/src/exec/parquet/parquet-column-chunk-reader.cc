@@ -51,10 +51,15 @@ ParquetColumnChunkReader::ParquetColumnChunkReader(HdfsParquetScanner* parent,
     schema_name_(move(schema_name)),
     page_reader_(parent, schema_name_),
     slot_id_(slot_id),
-    data_page_pool_(new MemPool(parent->scan_node_->mem_tracker())),
     value_mem_type_(value_mem_type),
     has_rep_level_(has_rep_level),
-    has_def_level_(has_def_level) {}
+    has_def_level_(has_def_level) {
+  if (parent->state_->query_options().mt_dop > 0) {
+    data_page_pool_.reset(new MemPool(parent->bp_client_));
+  } else {
+    data_page_pool_.reset(new MemPool(parent->scan_node_->mem_tracker()));
+  }
+}
 
 ParquetColumnChunkReader::~ParquetColumnChunkReader() {}
 

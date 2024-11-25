@@ -368,6 +368,7 @@ class ExecNode {
   friend class DataSink;
   friend class ScopedGetNextEventAdder;
   friend class ScopedOpenEventAdder;
+  friend class HdfsColumnarScanner;
 
   enum ExecutionModel {
     /// Exec nodes with single threaded execution. This is the default execution model
