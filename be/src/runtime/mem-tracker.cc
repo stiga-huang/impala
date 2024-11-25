@@ -245,6 +245,23 @@ MemTracker::~MemTracker() {
   delete reservation_counters_.Load();
 }
 
+void MemTracker::Consume(int64_t bytes) {
+  DCHECK_GE(bytes, 0);
+  DCHECK(!closed_) << label_;
+  if (UNLIKELY(bytes <= 0)) return; // < 0 needed in RELEASE, hits DCHECK in DEBUG
+
+  if (consumption_metric_ != nullptr) {
+    RefreshConsumptionFromMetric();
+    return;
+  }
+  for (MemTracker* tracker : all_trackers_) {
+    tracker->consumption_->Add(bytes);
+    if (tracker->consumption_metric_ == nullptr) {
+      DCHECK_GE(tracker->consumption_->current_value(), 0);
+    }
+  }
+}
+
 void MemTracker::RegisterMetrics(MetricGroup* metrics, const string& prefix) {
   num_gcs_metric_ = metrics->AddCounter(Substitute("$0.num-gcs", prefix), 0);
 

@@ -530,7 +530,16 @@ void HdfsScanNode::ProcessSplit(const vector<FilterContext>& filter_ctxs,
   scanner->Close();
   // Reservation may have been increased by the scanner, e.g. Parquet may allocate
   // additional reservation to scan columns.
-  *scanner_thread_reservation = context.total_reservation();
+  int64_t reservation_to_return = context.total_reservation();
+  // Some reservation are used in the output row batches. Try to return as more unused
+  // reservation as we can from this scanner. At this point we don't know whether the
+  // RowBatch consumers have released the resources. So we simply accumulate reservation
+  // used by all output RowBatches. 'reservation_to_return' could be negative.
+  reservation_to_return -= scanner->GetUsedReservationInRowBatch();
+  VLOG_QUERY << "reservation_to_return=" << reservation_to_return
+             << " context.total_reservation()=" << context.total_reservation()
+             << " scanner->GetUsedReservationInRowBatch()=" << scanner->GetUsedReservationInRowBatch();
+  *scanner_thread_reservation = max(0L, reservation_to_return);
 }
 
 void HdfsScanNode::SetDoneInternal(const Status& status) {

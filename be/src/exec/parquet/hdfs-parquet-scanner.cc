@@ -1682,6 +1682,7 @@ void HdfsParquetScanner::FlushRowGroupResources(RowBatch* row_batch) {
   context_->ReleaseCompletedResources(true);
   for (ParquetColumnReader* col_reader : column_readers_) col_reader->Close(row_batch);
   context_->ClearStreams();
+  used_reservation_in_output_batch_ += row_batch->GetUsedReservation();
 }
 
 void HdfsParquetScanner::ReleaseSkippedRowGroupResources() {

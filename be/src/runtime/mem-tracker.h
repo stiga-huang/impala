@@ -134,22 +134,7 @@ class MemTracker {
       const std::string& pool_name, ObjectPool* obj_pool);
 
   /// Increases consumption of this tracker and its ancestors by 'bytes'.
-  void Consume(int64_t bytes) {
-    DCHECK_GE(bytes, 0);
-    DCHECK(!closed_) << label_;
-    if (UNLIKELY(bytes <= 0)) return; // < 0 needed in RELEASE, hits DCHECK in DEBUG
-
-    if (consumption_metric_ != nullptr) {
-      RefreshConsumptionFromMetric();
-      return;
-    }
-    for (MemTracker* tracker : all_trackers_) {
-      tracker->consumption_->Add(bytes);
-      if (tracker->consumption_metric_ == nullptr) {
-        DCHECK_GE(tracker->consumption_->current_value(), 0);
-      }
-    }
-  }
+  void Consume(int64_t bytes);
 
   /// Increases the consumption of this tracker and the ancestors up to (but
   /// not including) end_tracker. This is useful if we want to move tracking between

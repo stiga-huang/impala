@@ -206,6 +206,8 @@ class HdfsScanner {
     return filter_ctxs_[filter_idx]->filter;
   }
 
+  virtual int64_t GetUsedReservationInRowBatch() const { return 0; }
+
   /// Scanner subclasses must implement these static functions as well.  Unfortunately,
   /// c++ does not allow static virtual functions.
 

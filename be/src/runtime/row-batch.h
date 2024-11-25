@@ -243,6 +243,8 @@ class RowBatch {
 
   MemPoolCounters GetMemPoolCounters() { return tuple_data_pool_.GetMemPoolCounters(); }
 
+  int64_t GetUsedReservation() const;
+
   /// Resets the row batch, returning all resources it has accumulated.
   void Reset();
 
@@ -530,11 +532,6 @@ class RowBatch {
   const RowDescriptor* row_desc_;
 
   MemTracker* mem_tracker_;  // not owned
-
-  struct BufferInfo {
-    BufferPool::ClientHandle* client = nullptr;
-    BufferPool::BufferHandle buffer;
-  };
 
   /// Pages attached to this row batch. See AddBuffer() for ownership semantics.
   std::vector<BufferInfo> buffers_;

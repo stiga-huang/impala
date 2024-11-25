@@ -59,6 +59,8 @@ class HdfsColumnarScanner : public HdfsScanner {
   static const char* LLVM_CLASS_NAME;
 
  protected:
+  BufferPool::ClientHandle* bp_client_;
+
   /// Column readers will write slot values into this scratch batch for
   /// top-level tuples. See AssembleRows() in the derived classes.
   boost::scoped_ptr<ScratchTupleBatch> scratch_batch_;

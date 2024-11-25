@@ -83,8 +83,9 @@ const char* HdfsColumnarScanner::LLVM_CLASS_NAME = "class.impala::HdfsColumnarSc
 HdfsColumnarScanner::HdfsColumnarScanner(HdfsScanNodeBase* scan_node,
     RuntimeState* state) :
     HdfsScanner(scan_node, state),
+    bp_client_(scan_node->buffer_pool_client()),
     scratch_batch_(new ScratchTupleBatch(
-        *scan_node->row_desc(), state_->batch_size(), scan_node->mem_tracker())) {
+        *scan_node->row_desc(), state_->batch_size(), bp_client_)) {
 }
 
 HdfsColumnarScanner::~HdfsColumnarScanner() {}
