@@ -378,6 +378,9 @@ void ScanNode::ScannerThreadState::Close(ScanNode* parent) {
     batch_queue_->Cleanup();
   }
   if (row_batches_mem_tracker_ != nullptr) {
+    if (row_batches_mem_tracker_->consumption() > 0) {
+
+    }
     row_batches_mem_tracker_->Close();
   }
   if (estimated_per_thread_mem_ != 0) {

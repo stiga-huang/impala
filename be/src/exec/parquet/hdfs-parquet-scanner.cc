@@ -91,6 +91,7 @@ HdfsParquetScanner::HdfsParquetScanner(HdfsScanNodeBase* scan_node, RuntimeState
     advance_row_group_(true),
     min_max_tuple_(nullptr),
     row_batches_produced_(0),
+    // TODO: Use BufferPool?
     dictionary_pool_(new MemPool(scan_node->mem_tracker())),
     stats_batch_read_pool_(new MemPool(scan_node->mem_tracker())),
     assemble_rows_timer_(scan_node_->materialize_tuple_timer()),

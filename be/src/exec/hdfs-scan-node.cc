@@ -250,6 +250,7 @@ void HdfsScanNode::ReturnReservationFromScannerThread(
       bytes, resource_profile_.min_reservation);
   DCHECK(status.ok()) << "Not possible, scans don't unpin pages" << status.GetDetail();
   DCHECK_GE(buffer_pool_client()->GetReservation(), resource_profile_.min_reservation);
+  VLOG_QUERY << "ReturnReservationFromScannerThread " << buffer_pool_client()->DebugString();
 }
 
 void HdfsScanNode::ThreadTokenAvailableCb(ThreadResourcePool* pool) {
@@ -321,6 +322,7 @@ void HdfsScanNode::ThreadTokenAvailableCb(ThreadResourcePool* pool) {
         COUNTER_ADD(scanner_thread_reservations_denied_counter_, 1);
         break;
       }
+      VLOG_QUERY << "Increase reservation " << scanner_thread_reservation << " in starting non-first thread: " << buffer_pool_client()->DebugString();
     }
 
     // Case 8 and 9.

@@ -40,6 +40,7 @@ MemPool::MemPool(MemTracker* mem_tracker, bool enforce_binary_chunk_sizes)
     next_chunk_size_(INITIAL_CHUNK_SIZE),
     total_allocated_bytes_(0),
     total_reserved_bytes_(0),
+    total_reserved_bytes_from_malloc_(0),
     mem_tracker_(mem_tracker),
     enforce_binary_chunk_sizes_(enforce_binary_chunk_sizes),
     backed_by_buffer_pool_(false),
@@ -53,6 +54,7 @@ MemPool::MemPool(BufferPool::ClientHandle* client)
     next_chunk_size_(INITIAL_CHUNK_SIZE),
     total_allocated_bytes_(0),
     total_reserved_bytes_(0),
+    total_reserved_bytes_from_malloc_(0),
     mem_tracker_(nullptr),
     enforce_binary_chunk_sizes_(false),
     backed_by_buffer_pool_(true),
@@ -92,8 +94,10 @@ void MemPool::FreeAll() {
   sw.Start();
   for (auto& chunk: chunks_) {
     if (chunk.buffer_idx >= 0) {
+      DCHECK_LT(chunk.buffer_idx, buffers_.size());
       ExecEnv::GetInstance()->buffer_pool()->FreeBuffer(
           buffers_[chunk.buffer_idx].client, &buffers_[chunk.buffer_idx].buffer);
+      VLOG_QUERY << "Freed " << chunk.size << " bytes. " << buffers_[chunk.buffer_idx].client->DebugString();
     } else {
       total_bytes_released += chunk.size;
       free(chunk.data);
@@ -155,6 +159,7 @@ bool MemPool::FindChunk(int64_t min_size, bool check_limits) noexcept {
     Status s = buffer_pool->AllocateUnreservedBuffer(
         bp_client_, chunk_size, &buffer_info.buffer);
     if (UNLIKELY(!s.ok() || !buffer_info.buffer.is_open())) return false;
+    VLOG_QUERY << "Allocated " << chunk_size << " bytes. " << bp_client_->DebugString();
     InsertChunk(first_free_idx, chunk_size, buffer_info.buffer.data());
     buffers_.push_back(std::move(buffer_info));
     chunks_.back().buffer_idx = buffers_.size() - 1;
@@ -162,6 +167,7 @@ bool MemPool::FindChunk(int64_t min_size, bool check_limits) noexcept {
     counters_.allocated_bytes.UpdateCounter(chunk_size);
     return true;
   }
+  DCHECK_EQ(bp_client_, nullptr);
   if (enforce_binary_chunk_sizes_) chunk_size = BitUtil::RoundUpToPowerOfTwo(chunk_size);
   if (check_limits) {
     if (!mem_tracker_->TryConsume(chunk_size)) return false;
@@ -178,6 +184,7 @@ bool MemPool::FindChunk(int64_t min_size, bool check_limits) noexcept {
   }
   counters_.sys_alloc_duration.UpdateCounter(alloc_sw.ElapsedTime());
   ASAN_POISON_MEMORY_REGION(buf, chunk_size);
+  total_reserved_bytes_from_malloc_ += chunk_size;
   InsertChunk(first_free_idx, chunk_size, buf);
   return true;
 }
@@ -225,9 +232,17 @@ void MemPool::AcquireData(MemPool* src, bool keep_current) {
   }
   src->total_reserved_bytes_ -= total_transferred_bytes;
   total_reserved_bytes_ += total_transferred_bytes;
+  src->total_reserved_bytes_from_malloc_ -= total_transferred_bytes_from_malloc;
+  total_transferred_bytes_from_malloc += total_transferred_bytes_from_malloc;
 
   if (total_transferred_bytes_from_malloc > 0) {
     DCHECK(src->mem_tracker_ && mem_tracker_);
+    if (total_transferred_bytes > total_transferred_bytes_from_malloc) {
+      VLOG_QUERY << "total_transferred_bytes=" << total_transferred_bytes
+                 << ", total_transferred_bytes_from_malloc=" << total_transferred_bytes_from_malloc
+                 << ", src_mem_tracker=" << (void*)src->mem_tracker_
+                 << ", dst_mem_tracker=" << (void*)mem_tracker_;
+    }
     src->mem_tracker_->TransferTo(mem_tracker_, total_transferred_bytes_from_malloc);
   }
 
@@ -240,6 +255,7 @@ void MemPool::AcquireData(MemPool* src, bool keep_current) {
   for (auto it = src->chunks_.begin(); it != src_end_chunk; ++insert_chunk, ++it) {
     insert_chunk = chunks_.insert(insert_chunk, *it);
     if (it->buffer_idx >= 0) {
+      DCHECK_LT(it->buffer_idx, src->buffers_.size());
       buffers_.push_back(std::move(src->buffers_[it->buffer_idx]));
       insert_chunk->buffer_idx = buffers_.size() - 1;
       ++num_moved_buffers;
@@ -277,7 +293,11 @@ void MemPool::AcquireData(MemPool* src, bool keep_current) {
 
 void MemPool::SetMemTracker(MemTracker* new_tracker) {
   DFAKE_SCOPED_LOCK(mutex_);
-  if (mem_tracker_) mem_tracker_->TransferTo(new_tracker, total_reserved_bytes_);
+  if (mem_tracker_) {
+    mem_tracker_->TransferTo(new_tracker, total_reserved_bytes_from_malloc_);
+    VLOG_QUERY << "Transferred " << total_reserved_bytes_from_malloc_ << " from " << (void*)mem_tracker_
+               << " to " << (void*)new_tracker;
+  }
   mem_tracker_ = new_tracker;
 }
 

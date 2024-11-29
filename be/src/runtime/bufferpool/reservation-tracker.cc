@@ -27,6 +27,7 @@
 #include "runtime/exec-env.h"
 #include "runtime/mem-tracker.h"
 #include "util/dummy-runtime-profile.h"
+#include "util/debug-util.h"
 #include "util/pretty-printer.h"
 #include "util/runtime-profile-counters.h"
 
@@ -448,6 +449,7 @@ void ReservationTracker::CheckConsistency() const {
 
 void ReservationTracker::UpdateUsedReservation(int64_t delta) {
   int64_t used_reservation = used_reservation_.Add(delta);
+  VLOG_QUERY << "used_reservation added " << delta << "\n" << GetStackTrace();
   COUNTER_SET(counters_.peak_used_reservation, used_reservation);
   CheckConsistency();
 }

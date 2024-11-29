@@ -287,6 +287,9 @@ class MemPool {
   /// sum of all bytes allocated in chunks_
   int64_t total_reserved_bytes_;
 
+  /// sum of all bytes allocated in chunks_ from malloc()
+  int64_t total_reserved_bytes_from_malloc_;
+
   std::vector<ChunkInfo> chunks_;
 
   /// The current and peak memory footprint of this pool. This is different from
