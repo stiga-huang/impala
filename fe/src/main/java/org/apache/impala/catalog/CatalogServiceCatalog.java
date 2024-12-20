@@ -78,6 +78,7 @@ import org.apache.impala.catalog.events.MetastoreEvents.MetastoreEventFactory;
 import org.apache.impala.catalog.events.MetastoreEventsProcessor;
 import org.apache.impala.catalog.events.MetastoreEventsProcessor.EventProcessorStatus;
 import org.apache.impala.catalog.events.MetastoreNotificationFetchException;
+import org.apache.impala.catalog.events.NoOpEventProcessor;
 import org.apache.impala.catalog.events.SelfEventContext;
 import org.apache.impala.catalog.metastore.CatalogHmsUtils;
 import org.apache.impala.catalog.monitor.CatalogMonitor;
@@ -107,6 +108,9 @@ import org.apache.impala.thrift.TCatalogObjectType;
 import org.apache.impala.thrift.TCatalogUpdateResult;
 import org.apache.impala.thrift.TDataSource;
 import org.apache.impala.thrift.TDatabase;
+import org.apache.impala.thrift.TErrorCode;
+import org.apache.impala.thrift.TEventProcessorAction;
+import org.apache.impala.thrift.TEventProcessorCmdParams;
 import org.apache.impala.thrift.TEventProcessorMetrics;
 import org.apache.impala.thrift.TEventProcessorMetricsSummaryResponse;
 import org.apache.impala.thrift.TFunction;
@@ -126,6 +130,7 @@ import org.apache.impala.thrift.TPartitionStats;
 import org.apache.impala.thrift.TPrincipalType;
 import org.apache.impala.thrift.TPrivilege;
 import org.apache.impala.thrift.TResetMetadataRequest;
+import org.apache.impala.thrift.TStatus;
 import org.apache.impala.thrift.TSystemTableName;
 import org.apache.impala.thrift.TTable;
 import org.apache.impala.thrift.TTableName;
@@ -3734,6 +3739,35 @@ public class CatalogServiceCatalog extends Catalog {
    */
   public TEventProcessorMetricsSummaryResponse getEventProcessorSummary() {
     return metastoreEventProcessor_.getEventProcessorSummary();
+  }
+
+  public TStatus setEventProcessorStatus(TEventProcessorCmdParams params) {
+    if (metastoreEventProcessor_ instanceof NoOpEventProcessor) {
+      return new TStatus(TErrorCode.GENERAL,
+          Lists.newArrayList("EventProcessor is disabled"));
+    }
+    MetastoreEventsProcessor ep = (MetastoreEventsProcessor) metastoreEventProcessor_;
+    if (params.action == TEventProcessorAction.PAUSE) {
+      ep.pause();
+    } else if (params.action == TEventProcessorAction.START) {
+      if (params.isSetEvent_id() && params.getEvent_id() == -1) {
+        ep.start(ep.getLatestEventId());
+      } else if (params.isSetEvent_id() && params.getEvent_id() > 0) {
+        long lastSyncedEventId = ep.getLastSyncedEventId();
+        if (params.getEvent_id() < lastSyncedEventId
+            && ep.getStatus() == EventProcessorStatus.ACTIVE) {
+          String err = "EventProcessor is active. Failed to set last synced event id " +
+              "from " + lastSyncedEventId + " back to " + params.getEvent_id() +
+              ". Please pause EventProcessor first.";
+          return new TStatus(TErrorCode.GENERAL,
+              Lists.newArrayList(err));
+        }
+        ep.start(params.getEvent_id());
+      } else if (ep.getStatus() != EventProcessorStatus.ACTIVE) {
+        ep.start(ep.getLastSyncedEventId());
+      }
+    }
+    return new TStatus(TErrorCode.OK, Collections.emptyList());
   }
 
   /**
