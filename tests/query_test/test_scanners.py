@@ -900,7 +900,9 @@ class TestParquet(ImpalaTestSuite):
           ranges_per_host[host] = 0
         ranges_per_host[host] += int(ranges_complete_list[i])
       for host in ranges_per_host:
-        assert ranges_per_host[host] == 2
+        assert ranges_per_host[host] == 2,\
+            ("ScanRangesComplete for " + host + " should be 2 in profile:\n" +
+             result.runtime_profile)
     finally:
       self.client.clear_configuration()
 
