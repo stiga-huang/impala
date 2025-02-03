@@ -41,7 +41,7 @@ elif [ ! -z "${TEST_JDK_VERSION:-}" ]; then
   export IMPALA_JDK_VERSION="${TEST_JDK_VERSION}"
 fi
 
-. "${IMPALA_HOME}/bin/impala-config.sh" > /dev/null 2>&1
+. "${IMPALA_HOME}/bin/impala-config.sh"
 . "${IMPALA_HOME}/testdata/bin/run-step.sh"
 if "${CLUSTER_DIR}/admin" is_kerberized; then
   KERB_ARGS="--use_kerberos"
