@@ -877,19 +877,20 @@ class TestParquet(ImpalaTestSuite):
       num_rows_read_list = re.findall(r'RowsRead: [0-9.K]* \(([0-9]*)\)',
         result.runtime_profile)
       # The extra fragment is the "Averaged Fragment"
-      assert len(num_rows_read_list) == 7
-      assert len(ranges_complete_list) == 7
+      assert len(num_rows_read_list) == 7, result.runtime_profile
+      assert len(ranges_complete_list) == 7, result.runtime_profile
 
       # Extract the host for each fragment instance. The first is the coordinator
       # fragment instance.
-      host_list = re.findall(r'host=(\S+:[0-9]*)', result.runtime_profile)
-      assert len(host_list) == 7
+      host_list = re.findall(r'\(host=([^:]+:[0-9]*)\)', result.runtime_profile)
+      assert len(host_list) == 7, result.runtime_profile
+      assert len(set(host_list)) == 3, result.runtime_profile
 
       total_rows_read = 0
       # Skip the Averaged Fragment; it comes first in the runtime profile.
       for num_row_read in num_rows_read_list[1:]:
         total_rows_read += int(num_row_read)
-      assert total_rows_read == TOTAL_ROWS
+      assert total_rows_read == TOTAL_ROWS, result.runtime_profile
 
       # Again skip the Averaged Fragment; it comes first in the runtime profile.
       # With mt_dop 2, every backend will have 2 instances.
