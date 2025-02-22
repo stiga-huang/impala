@@ -92,7 +92,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
       Iterable<FileDescriptor> oldFds, ListMap<TNetworkAddress> hostIndex,
       GroupedContentFiles icebergFiles, boolean requiresDataFilesInTableLocation,
       int newFilesThresholdParam) {
-    super(FileSystemUtil.createFullyQualifiedPath(new Path(iceTbl.location())), true,
+    super(iceTbl.location(), true,
         oldFds, hostIndex, null, null, HdfsFileFormat.ICEBERG);
     iceTbl_ = iceTbl;
     icebergFiles_ = icebergFiles;
@@ -118,17 +118,18 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
   }
 
   private void loadInternal() throws CatalogException, IOException {
+    Path partPath = FileSystemUtil.createFullyQualifiedPath(new Path(partDir_));
     loadedFds_ = new ArrayList<>();
-    loadStats_ = new LoadStats(partDir_);
+    loadStats_ = new LoadStats(partPath);
     fileMetadataStats_ = new FileMetadataStats();
 
     // Process the existing Fd ContentFile and return the newly added ContentFile
-    Iterable<ContentFile<?>> newContentFiles = loadContentFilesWithOldFds();
+    Iterable<ContentFile<?>> newContentFiles = loadContentFilesWithOldFds(partPath);
     // Iterate through all the newContentFiles, determine if StorageIds are supported,
     // and use different handling methods accordingly.
     // This considers that different ContentFiles are on different FileSystems
     List<Pair<FileSystem, ContentFile<?>>> filesSupportsStorageIds = Lists.newArrayList();
-    FileSystem fsForTable = FileSystemUtil.getFileSystemForPath(partDir_);
+    FileSystem fsForTable = FileSystemUtil.getFileSystemForPath(partPath);
     FileSystem defaultFs = FileSystemUtil.getDefaultFileSystem();
     for (ContentFile<?> contentFile : newContentFiles) {
       FileSystem fsForPath = fsForTable;
@@ -144,7 +145,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
       if (FileSystemUtil.supportsStorageIds(fsForPath)) {
         filesSupportsStorageIds.add(Pair.create(fsForPath, contentFile));
       } else {
-        FileDescriptor fd = createFd(fsForPath, contentFile, null, null);
+        FileDescriptor fd = createFd(fsForPath, contentFile, null, partPath, null);
         loadedFds_.add(fd);
         fileMetadataStats_.accumulate(fd);
         ++loadStats_.loadedFiles;
@@ -165,7 +166,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
           new Path(contentFileInfo.getSecond().path().toString()));
       FileStatus stat = nameToFileStatus.get(path);
       FileDescriptor fd = createFd(contentFileInfo.getFirst(),
-          contentFileInfo.getSecond(), stat, numUnknownDiskIds);
+          contentFileInfo.getSecond(), stat, partPath, numUnknownDiskIds);
       loadedFds_.add(fd);
       fileMetadataStats_.accumulate(fd);
     }
@@ -185,13 +186,14 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
    *  Iceberg tables are a collection of immutable, uniquely identifiable data files,
    *  which means we can safely reuse the old FDs.
    */
-  private Iterable<ContentFile<?>> loadContentFilesWithOldFds() throws IOException {
+  private Iterable<ContentFile<?>> loadContentFilesWithOldFds(Path partPath)
+      throws IOException {
     if (forceRefreshLocations || oldFdsByPath_.isEmpty()) {
       return icebergFiles_.getAllContentFiles();
     }
     List<ContentFile<?>> newContentFiles = Lists.newArrayList();
     for (ContentFile<?> contentFile : icebergFiles_.getAllContentFiles()) {
-      FileDescriptor fd = getOldFd(contentFile);
+      FileDescriptor fd = getOldFd(contentFile, partPath);
       if (fd == null) {
         newContentFiles.add(contentFile);
       } else {
@@ -204,7 +206,8 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
   }
 
   private FileDescriptor createFd(FileSystem fs, ContentFile<?> contentFile,
-      FileStatus stat, Reference<Long> numUnknownDiskIds) throws IOException {
+      FileStatus stat, Path partPath, Reference<Long> numUnknownDiskIds)
+      throws IOException {
     if (stat == null) {
       Path fileLoc = FileSystemUtil.createFullyQualifiedPath(
           new Path(contentFile.path().toString()));
@@ -217,7 +220,7 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
     }
 
     String absPath = null;
-    String relPath = FileSystemUtil.relativizePathNoThrow(stat.getPath(), partDir_);
+    String relPath = FileSystemUtil.relativizePathNoThrow(stat.getPath(), partPath);
     if (relPath == null) {
       if (requiresDataFilesInTableLocation_) {
         throw new IOException(String.format("Failed to load Iceberg datafile %s, because "
@@ -291,10 +294,10 @@ public class IcebergFileMetadataLoader extends FileMetadataLoader {
     return null;
   }
 
-  FileDescriptor getOldFd(ContentFile<?> contentFile) throws IOException {
+  FileDescriptor getOldFd(ContentFile<?> contentFile, Path partPath) throws IOException {
     Path contentFilePath = FileSystemUtil.createFullyQualifiedPath(
         new Path(contentFile.path().toString()));
-    String lookupPath = FileSystemUtil.relativizePathNoThrow(contentFilePath, partDir_);
+    String lookupPath = FileSystemUtil.relativizePathNoThrow(contentFilePath, partPath);
     if (lookupPath == null) {
       if (requiresDataFilesInTableLocation_) {
         throw new IOException(String.format("Failed to load Iceberg datafile %s, because "
