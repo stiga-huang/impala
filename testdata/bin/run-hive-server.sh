@@ -163,7 +163,7 @@ export KUDU_SKIP_HMS_PLUGIN_VALIDATION=${KUDU_SKIP_HMS_PLUGIN_VALIDATION:-1}
 # To debug log4j2 loading issues, add to HADOOP_CLIENT_OPTS:
 #   -Dorg.apache.logging.log4j.simplelog.StatusLogger.level=TRACE
 if [[ ${START_METASTORE} -eq 1 && -z $HMS_PID ]]; then
-  HADOOP_CLIENT_OPTS="-Xmx2024m  -Dhive.log.dir=${LOGDIR} \
+  HADOOP_CLIENT_OPTS="-Xmx4g -Dhive.log.dir=${LOGDIR} \
       -Dhive.log.file=hive-metastore.log" hive \
       --service metastore -p $HIVE_METASTORE_PORT >> ${LOGDIR}/hive-metastore.out 2>&1 &
 

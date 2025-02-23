@@ -29,7 +29,7 @@ function start {
   do_start hdfs namenode
 
   # Wait for the name node to exit safe mode
-  TRIES=30
+  TRIES=300
   while ! hdfs dfsadmin -safemode wait 2>&1 | grep -q "OFF$"; do
     printf "."
     if [ ${TRIES} -le 0 ]; then
