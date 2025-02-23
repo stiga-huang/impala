@@ -159,19 +159,29 @@ public class ParallelFileMetadataLoader {
     int poolSize = getPoolSize(loaders_.size(), fs_);
     ExecutorService pool = createPool(poolSize, logPrefix_);
     TOTAL_THREADS.addAndGet(poolSize);
+    AtomicInteger finishedJobs = new AtomicInteger(0);
     try (ThreadNameAnnotator tna = new ThreadNameAnnotator(logPrefix_)) {
       TOTAL_TABLES.incrementAndGet();
       List<Pair<FileMetadataLoader, Future<Void>>> futures =
           new ArrayList<>(loaders_.size());
       for (FileMetadataLoader loader : loaders_.values()) {
         futures.add(new Pair<>(
-            loader, pool.submit(() -> { loader.load(); return null; })));
+            loader, pool.submit(() -> { loader.load(); finishedJobs.incrementAndGet(); return null; })));
       }
 
       // Wait for the loaders to finish.
+      int totalJobs = futures.size();
+      int prevFinishedJobs = 0;
       for (int i = 0; i < futures.size(); i++) {
         try {
           futures.get(i).second.get();
+          // Log the progress for large tables. It takes seconds to load 200K partitions
+          // in a local env.
+          int currentFinishedJobs = finishedJobs.get();
+          if (currentFinishedJobs - prevFinishedJobs > 200000) {
+            prevFinishedJobs = currentFinishedJobs;
+            LOG.info("{}: {}/{} loaded", logPrefix_, currentFinishedJobs, totalJobs);
+          }
         } catch (ExecutionException | InterruptedException e) {
           if (++failedLoadTasks <= MAX_PATH_METADATA_LOADING_ERRORS_TO_LOG) {
             LOG.error(logPrefix_ + " encountered an error loading data for path " +
