@@ -102,6 +102,7 @@ import org.apache.impala.util.TAccessLevelUtil;
 import org.apache.impala.util.TResultRowBuilder;
 import org.apache.impala.util.ThreadNameAnnotator;
 import org.apache.thrift.TException;
+import org.ehcache.sizeof.SizeOf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -2318,6 +2319,8 @@ public class HdfsTable extends Table implements FeFsTable {
    */
   public void resetDroppedPartitions() { droppedPartitions_.clear(); }
 
+  private static final SizeOf SIZEOF = SizeOf.newInstance(true, true);
+
   /**
    * Gets catalog objects of new partitions since last catalog update. They are partitions
    * that coordinators are not aware of.
@@ -2431,10 +2434,15 @@ public class HdfsTable extends Table implements FeFsTable {
         partInfo.setIs_marked_cached(part.isMarkedCached());
         resp.table_info.partitions.add(partInfo);
       }
+      LOG.info("partitions size: {}",
+          PrintUtils.printBytes(SIZEOF.deepSizeOf(resp.table_info.partitions)));
     }
     // In most of the cases, the prefix map only contains one item for the table location.
     // Here we always send it since it's small.
-    resp.table_info.setPartition_prefixes(partitionLocationCompressor_.getPrefixes());
+    List<String> prefixes = partitionLocationCompressor_.getPrefixes();
+    LOG.info("Partition_prefixes size: {}",
+        PrintUtils.printBytes(SIZEOF.deepSizeOf(prefixes)));
+    resp.table_info.setPartition_prefixes(prefixes);
 
     if (reqWriteIdList != null) {
       LOG.debug("{} files filtered out of table {} for {}. Hit rate : {}",
@@ -2457,6 +2465,10 @@ public class HdfsTable extends Table implements FeFsTable {
     // Publish the isMarkedCached_ marker so coordinators don't need to validate
     // it again which requires additional HDFS RPCs.
     resp.table_info.setIs_marked_cached(isMarkedCached_);
+    LOG.info("TPartialTableInfo size: {}",
+        PrintUtils.printBytes(SIZEOF.deepSizeOf(resp.table_info)));
+    LOG.info("TGetPartialCatalogObjectResponse size: {}",
+        PrintUtils.printBytes(SIZEOF.deepSizeOf(resp)));
     return resp;
   }
 
