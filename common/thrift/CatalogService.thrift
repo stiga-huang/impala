@@ -452,6 +452,13 @@ struct TTableInfoSelector {
 
   // The response should contain information about the Iceberg table.
   13: bool want_iceberg_table
+
+  // Allow catalogd to truncate the response when it's too big, e.g. when there are too
+  // many file descriptors to return. The truncation is done in partition level, i.e.
+  // some partitions might be missing in the response. Coordinators should send a new
+  // request to fetch the missing partitions.
+  // Catalogd checks this flag to avoid breaking coordinators in old versions.
+  14: optional bool allow_incomplete_data = true
 }
 
 // Returned information about a particular partition.
