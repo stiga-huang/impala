@@ -318,4 +318,6 @@ struct TBackendGflags {
   143: required string injected_group_members_debug_only
 
   144: required i32 hms_event_sync_sleep_interval_ms
+
+  145: required i32 catalog_partial_fetch_max_files
 }

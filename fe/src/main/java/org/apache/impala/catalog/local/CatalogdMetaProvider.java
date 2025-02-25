@@ -45,6 +45,7 @@ import com.codahale.metrics.UniformReservoir;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Sets;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hive.metastore.api.ColumnStatisticsObj;
 import org.apache.hadoop.hive.metastore.api.Database;
@@ -1087,11 +1088,23 @@ public class CatalogdMetaProvider implements MetaProvider {
         req, "missing partition list result");
     checkResponse(resp.table_info.network_addresses != null,
         req, "missing network addresses");
-    checkResponse(resp.table_info.partitions.size() == ids.size(),
-        req, "returned %d partitions instead of expected %d",
-        resp.table_info.partitions.size(), ids.size());
     addTableMetadatStorageLoadTimeToProfile(
         resp.table_info.storage_metadata_load_time_ns);
+    while (resp.table_info.partitions.size() < ids.size()) {
+      int numFetchedParts = resp.table_info.partitions.size();
+      LOG.info("Fetched {}/{} partitions for {}",numFetchedParts, ids.size(), table);
+      List<Long> remainingIds = Lists.newArrayListWithCapacity(
+          ids.size() - numFetchedParts);
+      for (int i = numFetchedParts; i < ids.size(); i++) {
+        remainingIds.add(ids.get(i));
+      }
+
+      TGetPartialCatalogObjectRequest nextReq = new TGetPartialCatalogObjectRequest(req);
+      nextReq.table_info_selector.want_partition_metadata = true;
+      nextReq.table_info_selector.partition_ids = remainingIds;
+      TGetPartialCatalogObjectResponse nextResp = sendRequest(nextReq);
+      resp.table_info.partitions.addAll(nextResp.table_info.partitions);
+    }
     Map<PartitionRef, PartitionMetadata> ret = new HashMap<>();
     for (int i = 0; i < ids.size(); i++) {
       PartitionRef partRef = partRefs.get(i);
@@ -1250,7 +1263,7 @@ public class CatalogdMetaProvider implements MetaProvider {
       TGetPartialCatalogObjectRequest req, String msg, Object... args) throws TException {
     if (condition) return;
     throw new TException(String.format("Invalid response from catalogd for request " +
-        req.toString() + ": " + msg, args));
+        StringUtils.abbreviate(req.toString(), 1000) + ": " + msg, args));
   }
 
   @Override

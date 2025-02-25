@@ -2350,6 +2350,7 @@ public class HdfsTable extends Table implements FeFsTable {
     int numFilesFiltered = 0;
     if (partIds != null) {
       resp.table_info.partitions = Lists.newArrayListWithCapacity(partIds.size());
+      int numCollectedFds = 0;
       for (long partId : partIds) {
         HdfsPartition part = partitionMap_.get(partId);
         if (part == null) {
@@ -2372,23 +2373,27 @@ public class HdfsTable extends Table implements FeFsTable {
           partInfo.hms_partition = part.toHmsPartition();
         }
 
+        int numFds = 0;
         if (req.table_info_selector.want_partition_files) {
           partInfo.setLast_compaction_id(part.getLastCompactionId());
           try {
             if (!part.getInsertFileDescriptors().isEmpty()) {
-              partInfo.file_descriptors = new ArrayList<>();
+              partInfo.file_descriptors = Collections.emptyList();
               partInfo.insert_file_descriptors = new ArrayList<>();
               numFilesFiltered += addFilteredFds(part.getInsertFileDescriptors(),
                   partInfo.insert_file_descriptors, reqWriteIdList);
+              numFds += partInfo.insert_file_descriptors.size();
               partInfo.delete_file_descriptors = new ArrayList<>();
               numFilesFiltered += addFilteredFds(part.getDeleteFileDescriptors(),
                   partInfo.delete_file_descriptors, reqWriteIdList);
+              numFds += partInfo.delete_file_descriptors.size();
             } else {
               partInfo.file_descriptors = new ArrayList<>();
-              numFilesFiltered += addFilteredFds(part.getFileDescriptors(),
+              numFds += addFilteredFds(part.getFileDescriptors(),
                   partInfo.file_descriptors, reqWriteIdList);
-              partInfo.insert_file_descriptors = new ArrayList<>();
-              partInfo.delete_file_descriptors = new ArrayList<>();
+              partInfo.insert_file_descriptors = Collections.emptyList();
+              partInfo.delete_file_descriptors = Collections.emptyList();
+              numFds += partInfo.file_descriptors.size();
             }
             hits.inc();
           } catch (CatalogException ex) {
@@ -2407,6 +2412,15 @@ public class HdfsTable extends Table implements FeFsTable {
         }
 
         partInfo.setIs_marked_cached(part.isMarkedCached());
+        if (req.table_info_selector.allow_incomplete_data &&
+            numCollectedFds + numFds >
+                BackendConfig.INSTANCE.getCatalogPartialFetchMaxFiles()) {
+          LOG.warn("Collected {} file descriptors of {} partitions fpr table {}. " +
+                  "Coordinator should fetch the remaining partitions in another request.",
+              numCollectedFds, resp.table_info.partitions.size(), full_name_);
+          break;
+        }
+        numCollectedFds += numFds;
         resp.table_info.partitions.add(partInfo);
       }
     }
