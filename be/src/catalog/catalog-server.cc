@@ -76,7 +76,7 @@ DEFINE_int64_hidden(catalog_partial_fetch_rpc_queue_timeout_s, LLONG_MAX, "Maxim
     "(in seconds) a partial catalog object fetch RPC spends in the queue waiting "
     "to run. Must be set to a value greater than zero.");
 
-DEFINE_int32_hidden(catalog_partial_fetch_max_files, 4000000, "Maximum number of file "
+DEFINE_int32_hidden(catalog_partial_fetch_max_files, 1000, "Maximum number of file "
     "descriptors allowed to return in a single getPartialCatalogObject RPC. Used to "
     "avoid hitting the JVM array limit when catalogd serializing the thrift response");
 
