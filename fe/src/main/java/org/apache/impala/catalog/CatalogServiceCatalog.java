@@ -4328,7 +4328,7 @@ public class CatalogServiceCatalog extends Catalog {
     }
     MetastoreEventsProcessor eventsProcessor =
         (MetastoreEventsProcessor) metastoreEventProcessor_;
-    TStatus status = eventsProcessor.waitForSyncUpToCurrentEvent(req.timeout_s * 1000L);
+    TStatus status = eventsProcessor.waitForSyncUpToFreshMetadata(req);
     if (status.status_code != TErrorCode.OK) {
       res.setStatus(status);
       LOG.error(String.join("\n", status.error_msgs));
