@@ -764,10 +764,10 @@ struct TQueryOptions {
   187: optional bool use_legacy_hive_timestamp_conversion = false;
 
   // See comment in ImpalaService.thrift
-  188: optional i32 sync_hms_events_wait_time_s = 0
+  188: optional i32 sync_hms_events_wait_time_s = 30
 
   // See comment in ImpalaService.thrift
-  189: optional bool sync_hms_events_strict_mode = false
+  189: optional bool sync_hms_events_strict_mode = true
 
   // See comment in ImpalaService.thrift
   190: optional i32 skip_unneeded_updates_col_limit = 10
