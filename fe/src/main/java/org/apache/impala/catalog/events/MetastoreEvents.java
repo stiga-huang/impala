@@ -580,10 +580,10 @@ public class MetastoreEvents {
   public static abstract class MetastoreEvent {
 
     // String.format compatible string to prepend event id and type
-    private static final String STR_FORMAT_EVENT_ID_TYPE = "EventId: %d EventType: %s ";
+    private static final String STR_FORMAT_EVENT_ID_TYPE = "EventId: %d EventType: %s Target: %s ";
 
     // logger format compatible string to prepend to a log formatted message
-    private static final String LOG_FORMAT_EVENT_ID_TYPE = "EventId: {} EventType: {} ";
+    private static final String LOG_FORMAT_EVENT_ID_TYPE = "EventId: {} EventType: {} Target: {} ";
 
     protected static final String CLUSTER_WIDE_TARGET = "CLUSTER_WIDE";
 
@@ -802,10 +802,17 @@ public class MetastoreEvents {
      * Helper method to generate the format args after prepending the event id and type
      */
     private Object[] getLogFormatArgs(Object[] args) {
-      Object[] formatArgs = new Object[args.length + 2];
+      Object[] formatArgs = new Object[args.length + 3];
       formatArgs[0] = getEventId();
       formatArgs[1] = getEventType();
-      int i = 2;
+      String target = getTargetName();
+      // AlterPartitionEvent is on a single partition so we can also log the partition
+      // name. Add/DropPartitionEvent might have multiple partitions so ignore them here.
+      if (this instanceof AlterPartitionEvent) {
+        target += " " + ((AlterPartitionEvent) this).getPartName();
+      }
+      formatArgs[2] = target;
+      int i = 3;
       for (Object arg : args) {
         formatArgs[i] = arg;
         i++;
@@ -1669,7 +1676,7 @@ public class MetastoreEvents {
         // forcing file metadata reload so that new files (due to insert) are reflected
         // HdfsPartition
         reloadPartitions(Arrays.asList(insertPartition_),
-            FileMetadataLoadOpts.FORCE_LOAD, "INSERT event", false);
+            FileMetadataLoadOpts.FORCE_LOAD, "INSERT event " + getEventId(), false);
       } catch (CatalogException e) {
         throw new MetastoreNotificationNeedsInvalidateException(debugString("Refresh "
                 + "partition on table {} partition {} failed. Event processing cannot "
@@ -1686,7 +1693,7 @@ public class MetastoreEvents {
       // For non-partitioned tables, refresh the whole table.
       Preconditions.checkState(insertPartition_ == null);
       try {
-        boolean notSkipped = reloadTableFromCatalog("INSERT event", false);
+        boolean notSkipped = reloadTableFromCatalog("INSERT event " + getEventId(), false);
         if (!notSkipped) {
           metrics_.getCounter(MetastoreEventsProcessor.EVENTS_SKIPPED_METRIC).inc();
         }
@@ -2564,6 +2571,7 @@ public class MetastoreEvents {
     private final String serviceIdFromEvent_;
     // true if this alter event was due to a truncate operation in metastore
     private final boolean isTruncateOp_;
+    private final String partName_;
 
     /**
      * Prevent instantiation from outside should use MetastoreEventFactory instead
@@ -2590,11 +2598,15 @@ public class MetastoreEvents {
                 MetastoreEventPropertyKey.CATALOG_VERSION.getKey(), "-1"));
         serviceIdFromEvent_ = MetastoreEvents.getStringProperty(
             parameters, MetastoreEventPropertyKey.CATALOG_SERVICE_ID.getKey(), "");
+        partName_ = HdfsTable.constructPartitionName(getTPartitionSpecFromHmsPartition(
+            msTbl_, partitionAfter_));
       } catch (Exception e) {
         throw new MetastoreNotificationException(
             debugString("Unable to parse the alter partition message"), e);
       }
     }
+
+    public String getPartName() { return partName_; }
 
     @Override
     protected MetastoreEventType getBatchEventType() {
@@ -2673,8 +2685,6 @@ public class MetastoreEvents {
       } else {
         // Refresh the partition that was altered.
         Preconditions.checkNotNull(partitionAfter_);
-        List<TPartitionKeyValue> tPartSpec = getTPartitionSpecFromHmsPartition(msTbl_,
-            partitionAfter_);
         try {
           // load file metadata only if storage descriptor of partitionAfter_ differs
           // from sd of HdfsPartition. If the alter_partition event type is of truncate
@@ -2683,13 +2693,11 @@ public class MetastoreEvents {
               isTruncateOp_ ? FileMetadataLoadOpts.FORCE_LOAD :
                   FileMetadataLoadOpts.LOAD_IF_SD_CHANGED;
           reloadPartitions(Arrays.asList(partitionAfter_), fileMetadataLoadOpts,
-              "ALTER_PARTITION event", false);
+              "ALTER_PARTITION event " + getEventId() + " on " + partName_, false);
         } catch (CatalogException e) {
           throw new MetastoreNotificationNeedsInvalidateException(
-              debugString("Refresh partition on table {} partition {} failed. Event " +
-                  "processing cannot continue. Issue an invalidate command to reset " +
-                  "the event processor state.", getFullyQualifiedTblName(),
-                  HdfsTable.constructPartitionName(tPartSpec)), e);
+              debugString("Refresh partition on table {} partition {} failed.",
+                  getFullyQualifiedTblName(), partName_), e);
         }
       }
     }
@@ -2856,24 +2864,22 @@ public class MetastoreEvents {
           partitions.add(event.getPartitionForBatching());
         }
         try {
+          String reason = "batch " + getEventType() + " events";
           if (baseEvent_ instanceof InsertEvent) {
             // for insert event, always reload file metadata so that new files
             // are reflected in HdfsPartition
-            reloadPartitions(partitions, FileMetadataLoadOpts.FORCE_LOAD,
-                getEventType().toString() + " event", true);
+            reloadPartitions(partitions, FileMetadataLoadOpts.FORCE_LOAD, reason, true);
           } else {
             if (!partitionEventsToForceReload.isEmpty()) {
               // force reload truncated partitions
               reloadPartitions(partitionEventsToForceReload,
-                  FileMetadataLoadOpts.FORCE_LOAD, getEventType().toString()
-                  + " event", true);
+                  FileMetadataLoadOpts.FORCE_LOAD, reason, true);
             }
             if (!partitions.isEmpty()) {
               // alter partition event. Reload file metadata of only those partitions
               // for which sd has changed
               reloadPartitions(partitions,
-                  FileMetadataLoadOpts.LOAD_IF_SD_CHANGED, getEventType().toString()
-                  + " event", true);
+                  FileMetadataLoadOpts.LOAD_IF_SD_CHANGED, reason, true);
             }
           }
         } catch (CatalogException e) {

@@ -40,7 +40,8 @@ public class CatalogOpUtil {
           target = req.getAlter_db_params().getDb();
           break;
         case ALTER_TABLE:
-          target = TableName.thriftToString(req.getAlter_table_params().getTable_name());
+          target = TableName.thriftToString(req.getAlter_table_params().getTable_name()) +
+              " " + req.getAlter_table_params().getAlter_type();
           break;
         case ALTER_VIEW:
           target = TableName.thriftToString(req.getAlter_view_params().getView_name());
