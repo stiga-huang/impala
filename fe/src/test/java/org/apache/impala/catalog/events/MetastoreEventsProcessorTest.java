@@ -2857,6 +2857,8 @@ public class MetastoreEventsProcessorTest {
 
   @Test
   public void testCommitEvent() throws TException, ImpalaException, IOException {
+    Assume.assumeFalse("Skipping this since it depends on the behavior of CDP Hive 3",
+        TestUtils.isApacheHiveVersion());
     // Turn on incremental refresh for transactional table
     final TBackendGflags origCfg = BackendConfig.INSTANCE.getBackendCfg();
     try {
@@ -2877,6 +2879,8 @@ public class MetastoreEventsProcessorTest {
 
   @Test
   public void testAbortEvent() throws TException, ImpalaException, IOException {
+    Assume.assumeFalse("COMMIT_TXN events are not processed on Apache Hive 2/3",
+        TestUtils.isApacheHiveVersion() && TestUtils.getHiveMajorVersion() <= 3);
     // Turn on incremental refresh for transactional table
     final TBackendGflags origCfg = BackendConfig.INSTANCE.getBackendCfg();
     try {
@@ -3630,6 +3634,8 @@ public class MetastoreEventsProcessorTest {
    */
   @Test
   public void testSkipFetchOpenTransactionEvent() throws Exception {
+    Assume.assumeFalse("EventTypeSkipList is not supported on Apache Hive 2/3",
+        TestUtils.isApacheHiveVersion() && TestUtils.getHiveMajorVersion() <= 3);
     long currentEventId = eventsProcessor_.getCurrentEventId();
     try (MetaStoreClient client = catalog_.getMetaStoreClient()) {
       // 1. Fetch notification events after open and commit transaction
@@ -3676,6 +3682,8 @@ public class MetastoreEventsProcessorTest {
    */
   @Test
   public void testFetchEventsInBatchWithOpenTxnAsLastEvent() throws Exception {
+    Assume.assumeFalse("EventTypeSkipList is not supported on Apache Hive 2/3",
+        TestUtils.isApacheHiveVersion() && TestUtils.getHiveMajorVersion() <= 3);
     long currentEventId = eventsProcessor_.getCurrentEventId();
     try (MetaStoreClient client = catalog_.getMetaStoreClient()) {
       long txnId = MetastoreShim.openTransaction(client.getHiveClient());
@@ -3692,6 +3700,8 @@ public class MetastoreEventsProcessorTest {
 
   @Test
   public void testNotFetchingUnwantedEvents() throws Exception {
+    Assume.assumeFalse("EventTypeSkipList is not supported on Apache Hive 2/3",
+        TestUtils.isApacheHiveVersion() && TestUtils.getHiveMajorVersion() <= 3);
     String tblName = "test_event_skip_list";
     createDatabase(TEST_DB_NAME, null);
     Map<String, String> params = new HashMap<>();
@@ -3838,6 +3848,8 @@ public class MetastoreEventsProcessorTest {
 
   @Test
   public void testReloadEventOnLoadedTable() throws Exception {
+    Assume.assumeFalse("RELOAD event is not generated on Apache Hive 2/3",
+        TestUtils.isApacheHiveVersion() && TestUtils.getHiveMajorVersion() <= 3);
     String tblName = "test_reload";
     createDatabase(TEST_DB_NAME, null);
     eventsProcessor_.processEvents();
@@ -3883,6 +3895,9 @@ public class MetastoreEventsProcessorTest {
 
   @Test
   public void testCommitCompactionEventOnLoadedTable() throws Exception {
+    Assume.assumeFalse("Skipping this since COMMIT_TXN event is not supported on " +
+            "Apache Hive 2/3",
+        TestUtils.isApacheHiveVersion() && TestUtils.getHiveMajorVersion() <= 3);
     String tblName = "test_commit_compaction";
     createDatabase(TEST_DB_NAME, null);
     eventsProcessor_.processEvents();
@@ -3982,6 +3997,8 @@ public class MetastoreEventsProcessorTest {
    */
   @Test
   public void testEmptyPartitionValues() throws Exception {
+    Assume.assumeFalse("RELOAD event is not generated on Apache Hive 2/3",
+        TestUtils.isApacheHiveVersion() && TestUtils.getHiveMajorVersion() <= 3);
     String prevFlag = BackendConfig.INSTANCE.debugActions();
     try {
       String tblName = "test_empty";
@@ -4078,6 +4095,8 @@ public class MetastoreEventsProcessorTest {
 
   public void testAllocWriteIdEvent(String tblName, boolean isPartitioned,
       boolean isLoadTable) throws TException, TransactionException, CatalogException {
+    Assume.assumeFalse("COMMIT_TXN events are not processed on Apache Hive 2/3",
+        TestUtils.isApacheHiveVersion() && TestUtils.getHiveMajorVersion() <= 3);
     createDatabase(TEST_DB_NAME, null);
     eventsProcessor_.processEvents();
     createTransactionalTable(TEST_DB_NAME, tblName, isPartitioned);
@@ -4120,6 +4139,8 @@ public class MetastoreEventsProcessorTest {
 
   @Test
   public void testNotificationEventRequest() throws Exception {
+    Assume.assumeFalse("EventTypeSkipList is not supported on Apache Hive 2/3",
+        TestUtils.isApacheHiveVersion() && TestUtils.getHiveMajorVersion() <= 3);
     long currentEventId = eventsProcessor_.getCurrentEventId();
     // Generate some DB only related events
     createDatabaseFromImpala(TEST_DB_NAME, null);
@@ -4237,6 +4258,8 @@ public class MetastoreEventsProcessorTest {
 
   @Test
   public void testCommitTxnEventTargetName() throws Exception {
+    Assume.assumeFalse("Skipping this since it depends on the behavior of CDP Hive 3",
+        TestUtils.isApacheHiveVersion());
     String tblName = "test_commit_txn";
     String partTblName = "test_commit_txn_part";
     String insertNonPartTbl =
