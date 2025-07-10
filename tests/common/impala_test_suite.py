@@ -609,6 +609,16 @@ class ImpalaTestSuite(BaseTestSuite):
     assert response.status_code == requests.codes.ok
     return json.loads(response.text)
 
+  def verify_table_metadata_loaded(self, catalogd_port, db, table, expect_loaded=True):
+    url = "http://localhost:%d/table_metrics?json&name=%s.%s" % (catalogd_port, db, table)
+    response = self.get_debug_page(url)
+    assert "table_metrics" in response
+    table_metrics = response["table_metrics"]
+    if expect_loaded:
+      assert "Table not yet loaded" not in table_metrics, table
+    else:
+      assert "Table not yet loaded" in table_metrics, table
+
   def get_var_current_val(self, var):
     """Returns the current value of a given Impalad flag variable."""
     # Parse the /varz endpoint to get the flag information.

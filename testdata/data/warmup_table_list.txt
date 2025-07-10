@@ -1,0 +1,4 @@
+tpcds.customer
+tpcds.date_dim
+tpcds.item
+tpcds.store_sales

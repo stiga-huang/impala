@@ -525,7 +525,31 @@ class TestCatalogdHA(CustomClusterTestSuite):
     catalogd_args="--catalogd_ha_reset_metadata_on_failover=true",
     start_args="--enable_catalogd_ha")
   def test_metadata_after_failover(self, unique_database):
-    """Verify that the metadata is correct after failover."""
+    self._test_metadata_after_failover(unique_database)
+
+  @CustomClusterTestSuite.with_args(
+    statestored_args="--use_subscriber_id_as_catalogd_priority=true",
+    catalogd_args="--catalogd_ha_reset_metadata_on_failover=false "
+                  "--warmup_tables_config_file="
+                  "hdfs:///test-warehouse/warmup_table_list.txt",
+    start_args="--enable_catalogd_ha")
+  def test_warmed_up_metadata_after_failover(self, unique_database):
+    """Verify that the metadata is warmed up in the standby catalogd."""
+    for catalogd_port in [25020, 25021]:
+      self._test_warmed_up_tables(catalogd_port)
+    latest_catalogd = self._test_metadata_after_failover(unique_database, True)
+    self._test_warmed_up_tables(latest_catalogd.webserver_port)
+
+  def _test_warmed_up_tables(self, catalogd_port):
+    db = "tpcds"
+    tables = ["customer", "date_dim", "item", "store_sales"]
+    for table in tables:
+      self.verify_table_metadata_loaded(catalogd_port, db, table)
+    self.verify_table_metadata_loaded(catalogd_port, db, "store", expect_loaded=False)
+
+  def _test_metadata_after_failover(self, unique_database, skip_func_test=False):
+    """Verify that the metadata is correct after failover. Returns the current active
+    catalogd"""
     (active_catalogd, standby_catalogd) = self.__get_catalogds()
     catalogd_service_2 = standby_catalogd.service
 
@@ -536,6 +560,8 @@ class TestCatalogdHA(CustomClusterTestSuite):
         location=get_fs_path('/test-warehouse/libTestUdfs.so')))
     self.execute_query_expect_success(
         self.client, "select %s.identity_tmp(10)" % unique_database)
+
+    self.client.execute("create table %s.tbl(i int)" % unique_database)
 
     # Kill active catalogd
     active_catalogd.kill()
@@ -548,8 +574,15 @@ class TestCatalogdHA(CustomClusterTestSuite):
         "catalog-server.ha-number-active-status-change") > 0
     assert catalogd_service_2.get_metric_value("catalog-server.active-status")
 
-    self.execute_query_expect_success(
-        self.client, "select %s.identity_tmp(10)" % unique_database)
+    # TODO: due to IMPALA-14210 the standby catalogd can't update the native function
+    #  list by applying the ALTER_DATABASE event. So this will fail as function not found.
+    #  Remove this condition after IMPALA-14210 is resolved.
+    if not skip_func_test:
+      self.execute_query_expect_success(
+          self.client, "select %s.identity_tmp(10)" % unique_database)
+
+    self.execute_query_expect_success(self.client, "describe %s.tbl" % unique_database)
+    return catalogd_service_2
 
   def test_page_with_disable_ha(self):
     self.__test_catalog_ha_info_page()

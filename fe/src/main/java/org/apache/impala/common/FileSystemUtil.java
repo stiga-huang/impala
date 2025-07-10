@@ -43,17 +43,21 @@ import org.apache.hadoop.ozone.client.ObjectStore;
 import org.apache.hadoop.ozone.client.OzoneBucket;
 import org.apache.hadoop.ozone.client.OzoneVolume;
 import org.apache.impala.catalog.HdfsCompression;
-import org.apache.impala.common.Pair;
 import org.apache.impala.service.BackendConfig;
+import org.apache.impala.thrift.TTableName;
 import org.apache.impala.util.DebugUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -1262,5 +1266,29 @@ public class FileSystemUtil {
       }
       throw new NoSuchElementException("No more entries");
     }
+  }
+
+  public static Set<TTableName> loadWarmupTableNames(String configFile) {
+    if (configFile == null || configFile.isEmpty()) return Collections.emptySet();
+    Set<TTableName> warmupTables = new HashSet<>();
+    Path path = new Path(configFile);
+    try {
+      FileSystem fs = path.getFileSystem(new Configuration());
+      BufferedReader reader = new BufferedReader(new InputStreamReader(fs.open(path)));
+      String line;
+      while ((line = reader.readLine()) != null) {
+        line = line.trim();
+        String[] names = line.split("\\.");
+        if (names.length != 2) {
+          LOG.warn("Skipped illegal table name in warmup list: " + line);
+        }
+        warmupTables.add(new TTableName(names[0], names[1]));
+      }
+      return warmupTables;
+    } catch (IOException e) {
+      System.err.println("Failed to load the list of warmup tables: " + e.getMessage());
+      LOG.warn("Failed to load the list of warmup tables", e);
+    }
+    return Collections.emptySet();
   }
 }

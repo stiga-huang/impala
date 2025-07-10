@@ -1115,3 +1115,46 @@ class TestGracefulShutdown(CustomClusterTestSuite, HS2TestSuite):
     impalad.wait()
     shutdown_duration = time.time() - start_time
     assert shutdown_duration <= self.IDLE_SHUTDOWN_GRACE_PERIOD_S + 10
+
+
+class TestWarmupCatalog(CustomClusterTestSuite):
+
+  @pytest.mark.execute_serially
+  @CustomClusterTestSuite.with_args(
+      catalogd_args="--warmup_tables_config_file=file://%s/testdata/data/"
+                    "warmup_table_list.txt --keeps_warmup_tables_loaded=false" %
+                    os.environ['IMPALA_HOME'])
+  def test_warmup_tables_local_config_file(self):
+    self._test_warmup_tables(False)
+
+  @pytest.mark.execute_serially
+  @CustomClusterTestSuite.with_args(
+      catalogd_args="--warmup_tables_config_file=hdfs:///test-warehouse"
+                    "/warmup_table_list.txt --keeps_warmup_tables_loaded=false")
+  def test_warmup_tables_hdfs_config_file(self):
+    self._test_warmup_tables(False)
+
+  @pytest.mark.execute_serially
+  @CustomClusterTestSuite.with_args(
+      catalogd_args="--warmup_tables_config_file=hdfs:///test-warehouse"
+                    "/warmup_table_list.txt --keeps_warmup_tables_loaded=true")
+  def test_keeps_warmup_tables_loaded(self):
+    self._test_warmup_tables(True)
+
+  def _test_warmup_tables(self, keeps_warmup_tables_loaded):
+    self._verify_tables_warmed_up()
+    self.execute_query("invalidate metadata")
+    # Wait a while for the tables to be warmed up
+    time.sleep(1)
+    self._verify_tables_warmed_up()
+    self.execute_query("invalidate metadata tpcds.item")
+    # Wait a while for the tables to be warmed up
+    time.sleep(1)
+    self.verify_table_metadata_loaded(25020, "tpcds", "item", keeps_warmup_tables_loaded)
+
+  def _verify_tables_warmed_up(self):
+    db = "tpcds"
+    tables = ["customer", "date_dim", "item", "store_sales"]
+    for table in tables:
+      self.verify_table_metadata_loaded(25020, db, table)
+    self.verify_table_metadata_loaded(25020, db, "store", expect_loaded=False)
