@@ -107,9 +107,11 @@ class TestCatalogdHA(CustomClusterTestSuite):
     for catalogd in catalogds:
       port = catalogd.get_webserver_port()
       page = requests.get(self.HEALTHZ_URL.format(port))
-      assert page.status_code == requests.codes.ok
+      LOG.info("Status code of healthz page at port {}: {}".format(port, page.status_code))
+      assert page.status_code == requests.codes.ok, "port {} not ready".format(port)
       page = requests.head(self.HEALTHZ_URL.format(port))
-      assert page.status_code == requests.codes.ok
+      LOG.info("Status code of healthz page at port {}: {}".format(port, page.status_code))
+      assert page.status_code == requests.codes.ok, "port {} not ready".format(port)
     first_impalad = self.cluster.get_first_impalad()
     page = requests.head(self.HEALTHZ_URL.format(first_impalad.get_webserver_port()))
     assert page.status_code == requests.codes.ok
