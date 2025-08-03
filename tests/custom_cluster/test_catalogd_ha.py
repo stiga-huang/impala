@@ -107,9 +107,11 @@ class TestCatalogdHA(CustomClusterTestSuite):
     for catalogd in catalogds:
       port = catalogd.get_webserver_port()
       page = requests.get(self.HEALTHZ_URL.format(port))
-      assert page.status_code == requests.codes.ok
+      LOG.info("Status of healthz page at port {}: {}".format(port, page.status_code))
+      assert page.status_code == requests.codes.ok, "port {} not ready".format(port)
       page = requests.head(self.HEALTHZ_URL.format(port))
-      assert page.status_code == requests.codes.ok
+      LOG.info("Status of healthz page at port {}: {}".format(port, page.status_code))
+      assert page.status_code == requests.codes.ok, "port {} not ready".format(port)
     first_impalad = self.cluster.get_first_impalad()
     page = requests.head(self.HEALTHZ_URL.format(first_impalad.get_webserver_port()))
     assert page.status_code == requests.codes.ok
@@ -625,12 +627,14 @@ class TestCatalogdHA(CustomClusterTestSuite):
                   "--debug_actions=catalogd_event_processing_delay:SLEEP@1000 "
                   "--enable_reload_events=true --warmup_tables_config_file="
                   "file://%s/testdata/data/warmup_test_config.txt" % IMPALA_HOME,
-    impalad_args="--use_local_catalog=true",
+    impalad_args="--catalog_client_connection_num_retries=2 "
+                 "--use_local_catalog=true",
     start_args="--enable_catalogd_ha")
   def test_warmed_up_metadata_failover_catchup(self):
     """All tables under the 'warmup_test_db' will be warmed up based on the config.
     Use local-catalog mode so coordinator needs to fetch metadata from catalogd after
-    each DDL."""
+    each DDL. Use a smaller catalog_client_connection_num_retries since RPC retries will
+    all fail due to IMPALA-14228. We retry the query instead."""
     db = "warmup_test_db"
     self.execute_query("create database if not exists " + db)
     try:
