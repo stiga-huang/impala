@@ -1292,7 +1292,9 @@ class TestEventProcessingCustomConfigs(TestEventProcessingCustomConfigsBase):
       part_create = " partitioned by (p int)" if partitioned else ""
       part_insert = " partition (p = 1)" if partitioned else ""
 
-      create_stmt = "create transactional table {} (i int){}".format(fq_tbl, part_create)
+      create_stmt = ("create table {} (i int){} stored as ORC "
+                     "tblproperties ('transactional'='true',"
+                     "'transactional_properties'='default')").format(fq_tbl, part_create)
       self.run_stmt_in_hive(create_stmt)
       EventProcessorUtils.wait_for_event_processing(self)
       # Wait for StatestoreD to propagate the update.
