@@ -807,6 +807,24 @@ Java_org_apache_impala_service_FeSupport_NativeWaitForHmsEvents(JNIEnv* env,
   return result_bytes;
 }
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_org_apache_impala_service_FeSupport_InitThreadDebugInfo(JNIEnv* env,
+    jclass fe_support_class, jbyteArray thrift_query_id) {
+  TUniqueId query_id;
+  THROW_IF_ERROR_RET(DeserializeThriftMsg(env, thrift_query_id, &query_id), env,
+      JniUtil::internal_exc_class(), 0);
+  ThreadDebugInfo* tdi = new ThreadDebugInfo();
+  tdi->SetQueryId(query_id);
+  return reinterpret_cast<jlong>(tdi);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_apache_impala_service_FeSupport_DeleteThreadDebugInfo(JNIEnv* env,
+    jclass fe_support_class, jlong tdi) {
+  if (tdi == 0) return;
+  delete (ThreadDebugInfo*)tdi;
+}
+
 namespace impala {
 
 static JNINativeMethod native_methods[] = {
@@ -901,6 +919,14 @@ static JNINativeMethod native_methods[] = {
   {
     const_cast<char*>("NativeWaitForHmsEvents"), const_cast<char*>("([B[B)[B"),
     (void*)::Java_org_apache_impala_service_FeSupport_NativeWaitForHmsEvents
+  },
+  {
+    const_cast<char*>("NativeInitThreadDebugInfo"), const_cast<char*>("([B)J"),
+    (void*)::Java_org_apache_impala_service_FeSupport_InitThreadDebugInfo
+  },
+  {
+    const_cast<char*>("NativeDeleteThreadDebugInfo"), const_cast<char*>("(J)V"),
+    (void*)::Java_org_apache_impala_service_FeSupport_DeleteThreadDebugInfo
   },
 };
 

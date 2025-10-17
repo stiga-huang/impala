@@ -98,9 +98,9 @@ public:
     instance_id_ = parent->instance_id_;
   }
 
-private:
   /// Initializes a thread local pointer with thread_debug_info.
   static void InitializeThreadDebugInfo(ThreadDebugInfo* thread_debug_info);
+private:
   /// Resets the thread local pointer to nullptr.
   static void CloseThreadDebugInfo();
 

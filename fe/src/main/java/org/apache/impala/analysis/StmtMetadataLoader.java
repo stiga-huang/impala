@@ -32,7 +32,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
@@ -54,12 +56,16 @@ import org.apache.impala.common.InternalException;
 import org.apache.impala.common.Pair;
 import org.apache.impala.compat.MetastoreShim;
 import org.apache.impala.service.BackendConfig;
+import org.apache.impala.service.FeSupport;
 import org.apache.impala.service.Frontend;
 import org.apache.impala.service.FrontendProfile;
 import org.apache.impala.thrift.TUniqueId;
 import org.apache.impala.util.AcidUtils;
 import org.apache.impala.util.EventSequence;
 import org.apache.impala.util.TUniqueIdUtil;
+import org.apache.thrift.TException;
+import org.apache.thrift.TSerializer;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -357,6 +363,39 @@ public class StmtMetadataLoader {
         .collect(Collectors.toList());
   }
 
+  public static class ImpalaThreadFactory implements ThreadFactory {
+    private static final AtomicInteger poolNumber = new AtomicInteger(0);
+    private final String queryIdStr_;
+    private byte[] thriftQueryId_;
+
+    public ImpalaThreadFactory(TUniqueId queryId) {
+      if (queryId == null) {
+        queryIdStr_ = "<unknown_query_id>";
+        return;
+      }
+      queryIdStr_ = TUniqueIdUtil.PrintId(queryId);
+      try {
+        thriftQueryId_ = new TSerializer().serialize(queryId);
+      } catch (TException e) {
+        LOG.error("Failed to serialize query id {}", queryIdStr_);
+      }
+    }
+
+    @Override
+    public Thread newThread(@NotNull Runnable r) {
+      Runnable initializerRunnable = () -> {
+        long ptr = FeSupport.NativeInitThreadDebugInfo(thriftQueryId_);
+        try {
+          r.run();
+        } finally {
+          FeSupport.NativeDeleteThreadDebugInfo(ptr);
+        }
+      };
+      return new Thread(initializerRunnable,
+          "MissingTableLoaderThread-" + queryIdStr_ + "-" + poolNumber.getAndIncrement());
+    }
+  }
+
   /**
    * Load 'tbls' using executor service to speed up table loadings from CatalogD in case
    * of local catalog mode.
@@ -365,15 +404,11 @@ public class StmtMetadataLoader {
       Set<TableName> tbls, int maxThreads) throws InternalException {
     LOG.trace("Parallel load {} with {} max threads", tbls, maxThreads);
     FrontendProfile profile = FrontendProfile.getCurrentOrNull();
-    String queryIdStr =
-        queryId_ == null ? "<unknown_query_id>" : TUniqueIdUtil.PrintId(queryId_);
     List<Pair<TableName, FeTable>> tables = new ArrayList<>();
     ExecutorService executorService = null;
     try {
       executorService = Executors.newFixedThreadPool(maxThreads,
-          new ThreadFactoryBuilder()
-              .setNameFormat("MissingTableLoaderThread-" + queryIdStr + "-%d")
-              .build());
+          new ImpalaThreadFactory(queryId_));
       // Transform tbls to a list of tasks.
       List<Callable<Pair<TableName, FeTable>>> tasks =
           tbls.stream()

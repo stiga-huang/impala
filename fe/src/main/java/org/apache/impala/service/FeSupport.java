@@ -160,6 +160,10 @@ public class FeSupport {
   public native static byte[] NativeWaitForHmsEvents(byte[] thriftReq,
       byte[] thriftQueryOptions);
 
+  public native static long NativeInitThreadDebugInfo(byte[] thriftQueryId);
+
+  public native static void NativeDeleteThreadDebugInfo(long ptr);
+
   /**
    * Locally caches the jar at the specified HDFS location.
    *
