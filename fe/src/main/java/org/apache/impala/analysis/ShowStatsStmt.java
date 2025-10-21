@@ -17,7 +17,10 @@
 
 package org.apache.impala.analysis;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.impala.analysis.paimon.PaimonAnalyzer;
 import org.apache.impala.authorization.Privilege;
@@ -28,10 +31,14 @@ import org.apache.impala.catalog.FeTable;
 import org.apache.impala.catalog.FeView;
 import org.apache.impala.catalog.paimon.FePaimonTable;
 import org.apache.impala.common.AnalysisException;
+import org.apache.impala.planner.HdfsPartitionPruner;
+import org.apache.impala.rewrite.ExprRewriter;
+import org.apache.impala.rewrite.ExtractCompoundVerticalBarExprRule;
 import org.apache.impala.thrift.TShowStatsOp;
 import org.apache.impala.thrift.TShowStatsParams;
 
 import com.google.common.base.Preconditions;
+import com.google.common.base.Predicates;
 
 /**
  * Representation of a SHOW TABLE/COLUMN STATS statement for
@@ -41,21 +48,42 @@ public class ShowStatsStmt extends StatementBase implements SingleTableStmt {
   protected final TShowStatsOp op_;
   protected final TableName tableName_;
   protected boolean show_column_minmax_stats_ = false;
+  // Optional WHERE predicate for SHOW PARTITIONS.
+  // ONLY supported for HDFS tables (FeFsTable, excluding FeIcebergTable).
+  // Iceberg tables use a different partition mechanism and are not supported.
+  protected Expr whereClause_;
+  // Computed during analysis if whereClause_ is set for HDFS tables.
+  protected List<Long> filteredPartitionIds_ = null;
 
   // Set during analysis.
   protected FeTable table_;
 
   public ShowStatsStmt(TableName tableName, TShowStatsOp op) {
+    this(tableName, op, null);
+  }
+
+  public ShowStatsStmt(TableName tableName, TShowStatsOp op, Expr whereExpr) {
     op_ = Preconditions.checkNotNull(op);
     tableName_ = Preconditions.checkNotNull(tableName);
+    whereClause_ = whereExpr;
   }
 
   @Override
   public TableName getTableName() { return tableName_; }
 
+  /**
+   * Returns true if this SHOW PARTITIONS statement has a WHERE clause.
+   */
+  public boolean hasWhereClause() { return whereClause_ != null; }
+
   @Override
   public String toSql(ToSqlOptions options) {
-    return getSqlPrefix() + " " + tableName_.toString();
+    StringBuilder sb = new StringBuilder();
+    sb.append(getSqlPrefix()).append(" ").append(tableName_.toString());
+    if (whereClause_ != null && op_ == TShowStatsOp.PARTITIONS) {
+      sb.append(" WHERE ").append(whereClause_.toSql(options));
+    }
+    return sb.toString();
   }
 
   protected String getSqlPrefix() {
@@ -82,6 +110,7 @@ public class ShowStatsStmt extends StatementBase implements SingleTableStmt {
 
   @Override
   public void analyze(Analyzer analyzer) throws AnalysisException {
+    super.analyze(analyzer);
     table_ = analyzer.getTable(tableName_, Privilege.VIEW_METADATA);
     Preconditions.checkNotNull(table_);
     if (table_ instanceof FeView) {
@@ -136,6 +165,105 @@ public class ShowStatsStmt extends StatementBase implements SingleTableStmt {
     }
     show_column_minmax_stats_ =
         analyzer.getQueryOptions().isShow_column_minmax_stats();
+
+    // If WHERE clause is present for SHOW PARTITIONS on HDFS table, analyze and compute
+    // filtered IDs.
+    if (whereClause_ != null && op_ == TShowStatsOp.PARTITIONS) {
+      if (!(table_ instanceof FeFsTable) || table_ instanceof FeIcebergTable) {
+        throw new AnalysisException(
+          "WHERE clause in SHOW PARTITIONS is only supported for HDFS tables");
+      }
+
+      // Disable authorization checks for internal analysis of WHERE clause
+      analyzer.setEnablePrivChecks(false);
+      try {
+        // Resolve a table ref for analysis context and tuple.
+        // Use the fully qualified table name from the analyzed table object
+        TableName qualifiedName = new TableName(
+          table_.getDb().getName(), table_.getName());
+        TableRef tableRef = new TableRef(
+          qualifiedName.toPath(), null, Privilege.VIEW_METADATA);
+        tableRef = analyzer.resolveTableRef(tableRef);
+        tableRef.analyze(analyzer);
+
+        // Analyze the WHERE predicate if not already analyzed
+        if (!whereClause_.isAnalyzed()) {
+          whereClause_.analyze(analyzer);
+        }
+        whereClause_.checkReturnsBool("WHERE clause", true);
+
+        // Check if the WHERE clause contains CompoundVerticalBarExpr (||) that needs
+        // rewriting. If so, skip partition filtering in this analysis pass - it will
+        // happen in the second pass after rewriteExprs() is called.
+        List<CompoundVerticalBarExpr> compoundVerticalBarExprs = new ArrayList<>();
+        whereClause_.collectAll(Predicates.instanceOf(CompoundVerticalBarExpr.class),
+            compoundVerticalBarExprs);
+        if (!compoundVerticalBarExprs.isEmpty()) {
+          // Expression needs rewriting - defer partition filtering to second analysis.
+          return;
+        }
+        if (whereClause_.contains(Subquery.class)) {
+          throw new AnalysisException(
+            "Subqueries are not allowed in SHOW PARTITIONS WHERE");
+        }
+        if (whereClause_.contains(AnalyticExpr.class)) {
+          throw new AnalysisException(
+            "Analytic expressions are not allowed in SHOW PARTITIONS WHERE");
+        }
+        // Ensure all conjuncts reference only partition columns.
+        List<SlotId> partitionSlots = tableRef.getDesc().getPartitionSlots();
+        for (Expr conjunct : whereClause_.getConjuncts()) {
+          if (!conjunct.isBoundBySlotIds(partitionSlots)) {
+            throw new AnalysisException(
+              "SHOW PARTITIONS WHERE supports only partition columns");
+          }
+        }
+        // Build a pruner with the table's tuple and prune partitions.
+        HdfsPartitionPruner pruner = new HdfsPartitionPruner(tableRef.getDesc());
+        List<Expr> conjuncts = whereClause_.getConjuncts();
+        try {
+          // we want to include empty partitions like SHOW PARTITIONS does,
+          // so pass true to allow empty partitions here (don't filter them out).
+          org.apache.impala.common.Pair<
+            List<? extends org.apache.impala.catalog.FeFsPartition>,
+            List<Expr>> res =
+              pruner.prunePartitions(
+                analyzer, new ArrayList<>(conjuncts), true, tableRef);
+
+          Set<Long> ids = new HashSet<>();
+          for (org.apache.impala.catalog.FeFsPartition p : res.first) ids.add(p.getId());
+          filteredPartitionIds_ = new ArrayList<>(ids);
+        } catch (org.apache.impala.common.ImpalaException e) {
+          throw new AnalysisException(
+            "Failed to evaluate WHERE clause for SHOW PARTITIONS: " + e.getMessage(), e);
+        }
+      } finally {
+        // Re-enable authorization checks
+        analyzer.setEnablePrivChecks(true);
+      }
+    }
+  }
+
+  @Override
+  public void reset() {
+    super.reset();
+    // Clear computed partition IDs so they'll be recomputed after re-analysis
+    filteredPartitionIds_ = null;
+    // Reset the whereExpr if it exists
+    if (whereClause_ != null) whereClause_ = whereClause_.reset();
+  }
+
+  @Override
+  public void rewriteExprs(ExprRewriter rewriter) throws AnalysisException {
+    Preconditions.checkState(isAnalyzed());
+    // For SHOW PARTITIONS with WHERE clause, we need to do mandatory rewrites for ||
+    // operator as the partition pruner cannot execute it directly.
+    if (whereClause_ != null && op_ == TShowStatsOp.PARTITIONS) {
+      ExprRewriter mandatoryRewriter = new ExprRewriter(
+        ExtractCompoundVerticalBarExprRule.INSTANCE);
+      whereClause_ = mandatoryRewriter.rewrite(whereClause_, analyzer_);
+      rewriter.addNumChanges(mandatoryRewriter);
+    }
   }
 
   public TShowStatsParams toThrift() {
@@ -143,6 +271,11 @@ public class ShowStatsStmt extends StatementBase implements SingleTableStmt {
     TShowStatsParams showStatsParam = new TShowStatsParams(op_,
         new TableName(table_.getDb().getName(), table_.getName()).toThrift());
     showStatsParam.setShow_column_minmax_stats(show_column_minmax_stats_);
+    // Always set filteredPartitionIds if it exists (even if empty) to distinguish
+    // between "no matches" (empty list) and "all partitions" (null)
+    if (filteredPartitionIds_ != null) {
+      showStatsParam.setFiltered_partition_ids(filteredPartitionIds_);
+    }
     return showStatsParam;
   }
 }

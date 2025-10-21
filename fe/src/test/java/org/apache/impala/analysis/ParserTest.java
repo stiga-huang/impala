@@ -2130,6 +2130,7 @@ public class ParserTest extends FrontendTestBase {
     ParsesOk("SHOW PARTITIONS tbl");
     ParsesOk("SHOW PARTITIONS db.tbl");
     ParsesOk("SHOW PARTITIONS `db`.`tbl`");
+    ParsesOk("SHOW PARTITIONS tbl WHERE year = 2025 and month < 6");
 
     // Show range partitions
     ParsesOk("SHOW RANGE PARTITIONS tbl");

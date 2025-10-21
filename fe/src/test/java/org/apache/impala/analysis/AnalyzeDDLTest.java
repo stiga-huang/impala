@@ -4449,6 +4449,47 @@ public class AnalyzeDDLTest extends FrontendTestBase {
         "SHOW PARTITIONS not applicable to a view: functional.view_view");
     AnalysisError("show partitions functional_hbase.alltypes",
         "SHOW PARTITIONS must target an HDFS or Kudu table: functional_hbase.alltypes");
+
+    // Tests for WHERE clause in SHOW PARTITIONS (IMPALA-14065)
+    // Valid WHERE clauses with partition columns on HDFS tables
+    AnalyzesOk("show partitions functional.alltypes where year = 2009");
+    AnalyzesOk("show partitions functional.alltypes where year = 2009 and month = 1");
+    AnalyzesOk("show partitions functional.alltypes where year > 2009");
+    AnalyzesOk("show partitions functional.alltypes where year >= 2009 and month < 10");
+    AnalyzesOk("show partitions functional.alltypes where year in (2009, 2010)");
+    AnalyzesOk("show partitions functional.alltypes where year between 2009 and 2010");
+    AnalyzesOk("show partitions functional.alltypes where month is null");
+    AnalyzesOk("show partitions functional.alltypes where month is not null");
+    AnalyzesOk("show partitions functional.alltypes where year = 2009 or month = 5");
+
+    // WHERE clause with non-partition columns should fail
+    AnalysisError("show partitions functional.alltypes where id = 1",
+        "SHOW PARTITIONS WHERE supports only partition columns");
+    AnalysisError("show partitions functional.alltypes where year = 2009 and id = 1",
+        "SHOW PARTITIONS WHERE supports only partition columns");
+
+    // WHERE clause with subqueries should fail
+    AnalysisError("show partitions functional.alltypes where year in " +
+        "(select year from functional.alltypes)",
+        "Subqueries are not allowed in SHOW PARTITIONS WHERE");
+
+    // WHERE clause with analytic functions should fail
+    AnalysisError("show partitions functional.alltypes where " +
+        "row_number() over (order by year) = 1",
+        "Analytic expressions are not allowed in SHOW PARTITIONS WHERE");
+
+    // WHERE clause with Kudu table should fail (non-HDFS tables don't support WHERE)
+    AnalysisError("show partitions functional_kudu.alltypes where year = 2009",
+        "WHERE clause in SHOW PARTITIONS is only supported for HDFS tables");
+
+    // WHERE clause with Iceberg table should fail
+    AnalysisError("show partitions functional_parquet.iceberg_int_partitioned " +
+        "where i = 1",
+        "WHERE clause in SHOW PARTITIONS is only supported for HDFS tables");
+
+    // WHERE clause must be a boolean expression
+    AnalysisError("show partitions functional.alltypes where year",
+        "WHERE clause '`year`' requires return type 'BOOLEAN'. Actual type is 'INT'.");
   }
 
   @Test
