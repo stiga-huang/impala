@@ -636,4 +636,28 @@ public class BackendConfig {
   public void setDisableHmsSyncByDefault(boolean disableHmsSyncByDefault) {
     backendCfg_.disable_hms_sync_by_default = disableHmsSyncByDefault;
   }
+
+  public boolean historyStatsUseRedis() {
+    return backendCfg_.history_stats_use_redis;
+  }
+
+  public String historyStatsRedisHost() {
+    return backendCfg_.history_stats_redis_host;
+  }
+
+  public int historyStatsRedisPort() {
+    return backendCfg_.history_stats_redis_port;
+  }
+
+  public String historyStatsRedisPassword() {
+    return backendCfg_.history_stats_redis_password;
+  }
+
+  public int historyStatsRedisTimeoutMs() {
+    return backendCfg_.history_stats_redis_timeout_ms;
+  }
+
+  public int historyStatsRedisDb() {
+    return backendCfg_.history_stats_redis_db;
+  }
 }

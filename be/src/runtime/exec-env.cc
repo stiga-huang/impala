@@ -131,6 +131,26 @@ DEFINE_int32(local_catalog_cache_concurrency_level, 4,
     "level to avoid lock contention, the default value 4 is consistent with the "
     "default value of the original cache.");
 
+DEFINE_bool(history_stats_use_redis, false,
+    "Use Redis as the backend storage for history statistics. If this is set, "
+    "history statistics will be stored in Redis instead of the in-memory cache. "
+    "This allows sharing statistics across multiple impalad coordinators.");
+DEFINE_string(history_stats_redis_host, "localhost",
+    "The hostname or IP address of the Redis server to use for history statistics. "
+    "Only used if --history_stats_use_redis is enabled.");
+DEFINE_int32(history_stats_redis_port, 6379,
+    "The port of the Redis server to use for history statistics. "
+    "Only used if --history_stats_use_redis is enabled.");
+DEFINE_string(history_stats_redis_password, "",
+    "The password for the Redis server. Leave empty if no authentication is required. "
+    "Only used if --history_stats_use_redis is enabled.");
+DEFINE_int32(history_stats_redis_timeout_ms, 2000,
+    "The timeout in milliseconds for Redis operations. "
+    "Only used if --history_stats_use_redis is enabled.");
+DEFINE_int32(history_stats_redis_db, 0,
+    "The Redis database number to use for history statistics. "
+    "Only used if --history_stats_use_redis is enabled.");
+
 DECLARE_int32(num_threads_per_core);
 DECLARE_int32(num_cores);
 DECLARE_int32(krpc_port);

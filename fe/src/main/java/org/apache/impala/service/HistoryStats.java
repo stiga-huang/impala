@@ -1,8 +1,5 @@
 package org.apache.impala.service;
 
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.Weigher;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
 import org.apache.impala.thrift.THistoryStatsUpdate;
@@ -13,18 +10,26 @@ import org.slf4j.LoggerFactory;
 public class HistoryStats {
   private final static Logger LOG = LoggerFactory.getLogger(HistoryStats.class);
   public static HistoryStats INSTANCE = new HistoryStats();
-  final Cache<String, Object> cache_;
+  private final CacheBackend cacheBackend_;
 
   private HistoryStats() {
-    int concurrencyLevel = 4;
-    long cacheSizeBytes = 1024L * 1024 * 1024;
-    cache_ = CacheBuilder.newBuilder()
-        .concurrencyLevel(concurrencyLevel)
-        .maximumWeight(cacheSizeBytes)
-        //.expireAfterAccess(expirationSecs, TimeUnit.SECONDS)
-        .weigher(new HBOWeither())
-        .recordStats()
-        .build();
+    // Determine which cache backend to use based on configuration
+    if (BackendConfig.INSTANCE != null && 
+        BackendConfig.INSTANCE.historyStatsUseRedis()) {
+      LOG.info("Initializing HistoryStats with Redis cache backend");
+      cacheBackend_ = new RedisCacheBackend(
+          BackendConfig.INSTANCE.historyStatsRedisHost(),
+          BackendConfig.INSTANCE.historyStatsRedisPort(),
+          BackendConfig.INSTANCE.historyStatsRedisPassword(),
+          BackendConfig.INSTANCE.historyStatsRedisDb(),
+          BackendConfig.INSTANCE.historyStatsRedisTimeoutMs()
+      );
+    } else {
+      LOG.info("Initializing HistoryStats with in-memory cache backend");
+      int concurrencyLevel = 4;
+      long cacheSizeBytes = 1024L * 1024 * 1024;
+      cacheBackend_ = new InMemoryCacheBackend(concurrencyLevel, cacheSizeBytes);
+    }
   }
 
   public void writeStats(THistoryStatsUpdate stats) {
@@ -41,7 +46,7 @@ public class HistoryStats {
       hasher.putUnencodedChars(stats.conjuncts_string);
     }
     String key = hasher.hash().toString();
-    cache_.put(key, stats);
+    cacheBackend_.put(key, stats);
     LOG.info("Write HBO key: {}, tableName: {}, stats: {}", key, stats.table_name, stats);
   }
 
@@ -52,21 +57,21 @@ public class HistoryStats {
     if (conjuncts != null) hasher.putUnencodedChars(conjuncts);
     String key = hasher.hash().toString();
     LOG.info("Read HBO key: {} for table {}", key, fqTblName);
-    Object value = cache_.getIfPresent(key);
+    Object value = cacheBackend_.getIfPresent(key);
     if (value instanceof TScanNodeCardinality) {
       TScanNodeCardinality stats = (TScanNodeCardinality) value;
       return stats.num_rows;
-    } else {
-      LOG.info("Wrong class");
+    } else if (value != null) {
+      LOG.warn("Cached value has wrong class: {}", value.getClass().getName());
     }
     return null;
   }
 
-  static class HBOWeither implements Weigher<String, Object> {
-
-    @Override
-    public int weigh(String key, Object value) {
-      return key.length() + 100;
-    }
+  /**
+   * Get statistics about the cache backend.
+   * @return Cache statistics string
+   */
+  public String getCacheStats() {
+    return cacheBackend_.getStats();
   }
 }

@@ -45,6 +45,12 @@ DECLARE_int32(kudu_operation_timeout_ms);
 DECLARE_int32(min_jdbc_scan_cardinality);
 DECLARE_int64(inc_stats_size_limit_bytes);
 DECLARE_string(principal);
+DECLARE_bool(history_stats_use_redis);
+DECLARE_string(history_stats_redis_host);
+DECLARE_int32(history_stats_redis_port);
+DECLARE_string(history_stats_redis_password);
+DECLARE_int32(history_stats_redis_timeout_ms);
+DECLARE_int32(history_stats_redis_db);
 DECLARE_string(lineage_event_log_dir);
 DECLARE_string(principal);
 DECLARE_string(local_library_dir);
@@ -600,6 +606,12 @@ Status PopulateThriftBackendGflags(TBackendGflags& cfg) {
   cfg.__set_min_jdbc_scan_cardinality(FLAGS_min_jdbc_scan_cardinality);
   cfg.__set_max_stmt_metadata_loader_threads(FLAGS_max_stmt_metadata_loader_threads);
   cfg.__set_disable_hms_sync_by_default(FLAGS_disable_hms_sync_by_default);
+  cfg.__set_history_stats_use_redis(FLAGS_history_stats_use_redis);
+  cfg.__set_history_stats_redis_host(FLAGS_history_stats_redis_host);
+  cfg.__set_history_stats_redis_port(FLAGS_history_stats_redis_port);
+  cfg.__set_history_stats_redis_password(FLAGS_history_stats_redis_password);
+  cfg.__set_history_stats_redis_timeout_ms(FLAGS_history_stats_redis_timeout_ms);
+  cfg.__set_history_stats_redis_db(FLAGS_history_stats_redis_db);
   return Status::OK();
 }
 

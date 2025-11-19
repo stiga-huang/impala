@@ -587,6 +587,13 @@ under the License.
       <artifactId>zero-allocation-hashing</artifactId>
       <version>0.16</version>
     </dependency>
+
+    <dependency>
+      <groupId>redis.clients</groupId>
+      <artifactId>jedis</artifactId>
+      <version>4.3.1</version>
+    </dependency>
+
   </dependencies>
 
   <reporting>

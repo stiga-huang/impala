@@ -365,4 +365,16 @@ struct TBackendGflags {
   167: required bool disable_hms_sync_by_default
 
   168: required i32 hms_event_catchup_threshold_s
+
+  169: required bool history_stats_use_redis
+
+  170: required string history_stats_redis_host
+
+  171: required i32 history_stats_redis_port
+
+  172: required string history_stats_redis_password
+
+  173: required i32 history_stats_redis_timeout_ms
+
+  174: required i32 history_stats_redis_db
 }
