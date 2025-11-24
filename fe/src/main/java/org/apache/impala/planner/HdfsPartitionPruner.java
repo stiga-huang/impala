@@ -112,7 +112,7 @@ public class HdfsPartitionPruner {
    * If 'allowEmpty' is False, empty partitions are not returned.
    */
   public Pair<List<? extends FeFsPartition>, List<Expr>> prunePartitions(
-      Analyzer analyzer, List<Expr> conjuncts, boolean allowEmpty,
+      Analyzer analyzer, List<Expr> conjuncts, boolean allowEmpty, boolean evalAllFuncs,
       TableRef hdfsTblRef)
       throws ImpalaException {
     // Start with creating a collection of partition filters for the applicable conjuncts.
@@ -129,7 +129,8 @@ public class HdfsPartitionPruner {
     Iterator<Expr> it = conjuncts.iterator();
     while (it.hasNext()) {
       Expr conjunct = it.next();
-      if (isPartitionPrunedFilterConjunct(partitionSlots_, conjunct)) {
+      if (conjunct.isBoundBySlotIds(partitionSlots_)
+          && (evalAllFuncs || !conjunct.contains(Expr.IS_NONDETERMINISTIC_BUILTIN_FN_PREDICATE))) {
         // Check if the conjunct can be evaluated from the partition metadata.
         // Use a cloned conjunct to rewrite BetweenPredicates and allow
         // canEvalUsingPartitionMd() to fold constant expressions without modifying
@@ -138,7 +139,8 @@ public class HdfsPartitionPruner {
         if (canEvalUsingPartitionMd(clonedConjunct, analyzer)) {
           simpleFilterConjuncts.add(Expr.pushNegationToOperands(clonedConjunct));
         } else {
-          partitionFilters.add(new HdfsPartitionFilter(clonedConjunct, tbl_, analyzer));
+          partitionFilters.add(new HdfsPartitionFilter(clonedConjunct, tbl_, analyzer,
+              evalAllFuncs));
         }
         partitionConjuncts.add(clonedConjunct);
         it.remove();

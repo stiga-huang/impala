@@ -51,14 +51,17 @@ public class HdfsPartitionFilter {
   private final static Logger LOG = LoggerFactory.getLogger(HdfsPartitionFilter.class);
 
   private final Expr predicate_;
+  private final boolean evalAllFuncs_;
 
   // lhs exprs of smap used in isMatch()
   private final List<SlotRef> lhsSlotRefs_ = new ArrayList<>();
   // indices into Table.getColumnNames()
   private final List<Integer> refdKeys_ = new ArrayList<>();
 
-  public HdfsPartitionFilter(Expr predicate, FeFsTable tbl, Analyzer analyzer) {
+  public HdfsPartitionFilter(Expr predicate, FeFsTable tbl, Analyzer analyzer,
+      boolean evalAllFuncs) {
     predicate_ = predicate;
+    evalAllFuncs_ = evalAllFuncs;
 
     // populate lhsSlotRefs_ and refdKeys_
     List<SlotId> refdSlots = new ArrayList<>();
@@ -125,7 +128,7 @@ public class HdfsPartitionFilter {
       LOG.trace("buildPartitionPredicate: " + literalPredicate.toSql() + " " +
           literalPredicate.debugString());
     }
-    if (!literalPredicate.isConstant()) {
+    if (!literalPredicate.isConstant() && !evalAllFuncs_) {
       throw new NotImplementedException(
           "Unsupported non-deterministic predicate: " + predicate_.toSql());
     }

@@ -394,7 +394,7 @@ WHERE clause '`year`' requires return type 'BOOLEAN'. Actual type is 'INT'.
 # Negative test: SHOW PARTITIONS WHERE with aggregate function
 show partitions alltypes where count(year) > 0
 ---- CATCH
-Failed to evaluate WHERE clause for SHOW PARTITIONS: Unsupported non-deterministic predicate: count(`year`) > 0
+Aggregate functions are not allowed in SHOW PARTITIONS WHERE
 ====
 ---- QUERY
 # Negative test: SHOW PARTITIONS WHERE on Kudu table

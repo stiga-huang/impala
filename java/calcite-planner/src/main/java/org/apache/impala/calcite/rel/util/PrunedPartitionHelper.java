@@ -61,7 +61,7 @@ public class PrunedPartitionHelper {
     List<Expr> conjuncts = converter.getImpalaConjuncts();
     // IMPALA-13849: tblref is null.  Tablesampling is disabled.
     Pair<List<? extends FeFsPartition>, List<Expr>> impalaPair =
-        pruner.prunePartitions(analyzer, new ArrayList<>(conjuncts), true,
+        pruner.prunePartitions(analyzer, new ArrayList<>(conjuncts), true, false,
             null);
 
     prunedPartitions_ = impalaPair.first;

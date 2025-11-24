@@ -202,6 +202,14 @@ public class ShowStatsStmt extends StatementBase implements SingleTableStmt {
           // Expression needs rewriting - defer partition filtering to second analysis.
           return;
         }
+        List<FunctionCallExpr> funcs = new ArrayList<>();
+        whereClause_.collectAll(Predicates.instanceOf(FunctionCallExpr.class), funcs);
+        for (FunctionCallExpr func : funcs) {
+          if (func.isAggregateFunction()) {
+            throw new AnalysisException(
+                "Aggregate functions are not allowed in SHOW PARTITIONS WHERE");
+          }
+        }
         if (whereClause_.contains(Subquery.class)) {
           throw new AnalysisException(
             "Subqueries are not allowed in SHOW PARTITIONS WHERE");
@@ -228,7 +236,7 @@ public class ShowStatsStmt extends StatementBase implements SingleTableStmt {
             List<? extends org.apache.impala.catalog.FeFsPartition>,
             List<Expr>> res =
               pruner.prunePartitions(
-                analyzer, new ArrayList<>(conjuncts), true, tableRef);
+                analyzer, new ArrayList<>(conjuncts), true, true, tableRef);
 
           Set<Long> ids = new HashSet<>();
           for (org.apache.impala.catalog.FeFsPartition p : res.first) ids.add(p.getId());
