@@ -480,6 +480,6 @@ Status Frontend::GetNonOdbcKeywords(const string& odbc_keywords_csv, string* res
   return JniUtil::CallJniMethod(fe_, get_non_odbc_keywords_id_, csv, response);
 }
 
-Status Frontend::StoreExecStats(const THistoryStatsUpdate& stats) {
+Status Frontend::StoreExecStats(const THistoricalStatsUpdate& stats) {
   return JniUtil::CallJniMethod(fe_, store_exec_stats_, stats);
 }

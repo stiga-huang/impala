@@ -266,7 +266,7 @@ class Frontend {
   /// Returns a CSV list of Impala keywords excluding the provided ODBC-reserved CSV.
   Status GetNonOdbcKeywords(const std::string& odbc_keywords_csv, std::string* response);
 
-  Status StoreExecStats(const THistoryStatsUpdate& stats);
+  Status StoreExecStats(const THistoricalStatsUpdate& stats);
 
  private:
   jclass fe_class_; // org.apache.impala.service.JniFrontend class

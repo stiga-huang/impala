@@ -24,15 +24,17 @@ namespace java org.apache.impala.thrift
 include "Exprs.thrift"
 
 // Execution stats extracted from a query
-struct THistoryStatsUpdate {
-  1: optional list<TScanNodeCardinality> scan_node_cards
+struct THistoricalStatsUpdate {
+  1: optional map<string, TScanNodeCardinality> scan_node_cards
 }
 
 struct TScanNodeCardinality {
-  // Key
-  1: required string table_name
+  1: required i64 num_rows
+  // TODO: add mem usage
+
+  // Following fileds are used to compute confidence
   2: required i64 catalog_version
-  3: optional string conjuncts_string
-  // Value
-  4: required i64 num_rows
+  // Only for file based tables
+  3: optional i64 num_input_files
+  4: optional i64 input_file_size
 }

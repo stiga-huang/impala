@@ -80,7 +80,7 @@ import org.apache.impala.common.ThriftSerializationCtx;
 import org.apache.impala.fb.FbFileBlock;
 import org.apache.impala.planner.RuntimeFilterGenerator.RuntimeFilter;
 import org.apache.impala.service.BackendConfig;
-import org.apache.impala.service.HistoryStats;
+import org.apache.impala.service.HistoricalStats;
 import org.apache.impala.thrift.TExplainLevel;
 import org.apache.impala.thrift.TExpr;
 import org.apache.impala.thrift.TFileSplitGeneratorSpec;
@@ -115,6 +115,8 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
 
 /**
  * Scan of a single table.
@@ -1707,8 +1709,8 @@ public class HdfsScanNode extends ScanNode {
       cardinality_ = totalFiles;
     }
     if (analyzer.getQueryOptions().enable_hbo) {
-      Long numRowsFromHBO = HistoryStats.INSTANCE.getNumRows(
-          tbl_.getFullName(), tbl_.getCatalogVersion(), getConjunctsStringForHBO());
+      // TODO: pass totalInputFiles and totalInputBytes to getHboHashString()
+      Long numRowsFromHBO = HistoricalStats.INSTANCE.getNumRows(getHboHashString());
       if (numRowsFromHBO != null) {
         hboHit_ = true;
         cardinality_ = capCardinalityAtLimit(numRowsFromHBO);
@@ -1865,19 +1867,41 @@ public class HdfsScanNode extends ScanNode {
     Preconditions.checkState(false, "Unexpected use of old toThrift() signature.");
   }
 
-  public String getConjunctsStringForHBO() {
-    for (Expr e: conjuncts_) {
-      LOG.info("<<<HBO>>> CONJUNCT STR: {}", e.toSql(ToSqlOptions.FOR_HBO));
+  public String getHboHashString() {
+    StringBuilder sb = new StringBuilder("ScanNode:");
+    sb.append(tbl_.getFullName());
+    sb.append("|");
+    List<String> partConjStrings = new ArrayList<>();
+    for (Expr e: partitionConjuncts_) {
+      // TODO: cnonicalize partition conjuncts
+      partConjStrings.add(e.toSql(ToSqlOptions.FOR_HBO));
     }
-    return Stream.concat(conjuncts_.stream(), partitionConjuncts_.stream())
-        .map(e -> e.toSql(ToSqlOptions.FOR_HBO))
-        .sorted()
-        .collect(Collectors.joining(","));
+    Collections.sort(partConjStrings);
+
+    List<String> conjStrings = new ArrayList<>();
+    for (Expr e: conjuncts_) {
+      conjStrings.add(e.toSql(ToSqlOptions.FOR_HBO));
+    }
+    Collections.sort(conjStrings);
+
+    for (String s: partConjStrings) {
+      sb.append(s);
+      sb.append("|");
+      LOG.info("<<<HBO>>> PARTITION CONJUNCT STR: {}", s);
+    }
+    for (String s: conjStrings) {
+      sb.append(s);
+      sb.append("|");
+      LOG.info("<<<HBO>>> CONJUNCT STR: {}", s);
+    }
+    Hasher hasher = Hashing.murmur3_128().newHasher();
+    hasher.putUnencodedChars(sb.toString());
+    return hasher.hash().toString();
   }
 
   @Override
   protected void toThrift(TPlanNode msg, ThriftSerializationCtx serialCtx) {
-    msg.conjuncts_string = getConjunctsStringForHBO();
+    msg.hbo_hash_key = getHboHashString();
     msg.hdfs_scan_node = new THdfsScanNode(serialCtx.translateTupleId(
         desc_.getId()).asInt(), new HashSet<>());
     // Register this scan node as an input for tuple caching.

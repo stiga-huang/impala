@@ -870,8 +870,7 @@ struct TPlanNode {
 
   31: optional TPaimonScanNode paimon_table_scan_node
 
-  // Used in HBO only
-  32: optional string conjuncts_string
+  32: optional string hbo_hash_key
 }
 
 // A flattened representation of a tree of PlanNodes, obtained by depth-first

@@ -1712,8 +1712,8 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
     VLOG_QUERY << "<<<HBO>>>Filter " << id << " rejected some rows";
   }
 
-  THistoryStatsUpdate history_stats;
-  for (TPlanNode p : GetScanNodes(exec_req)) {
+  THistoricalStatsUpdate history_stats;
+  for (const TPlanNode& p : GetScanNodes(exec_req)) {
     // Skip nodes if runtime filters have filtered some rows. Those rows are ignored
     // since they can't pass later join nodes. Currently don't have context to track
     // this. On the other hand, the output cardinality depends on when the runtime
@@ -1731,7 +1731,7 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
       if (has_effective_filters) continue;
     }
 
-    VLOG_QUERY << "<<<HBO>>>conjuncts_string: " << p.conjuncts_string;
+    VLOG_QUERY << "<<<HBO>>>hash_key: " << p.hbo_hash_key;
     int64_t cardinality = 0;
     for (const TExecStats& stat: exec_summaries[p.node_id].exec_stats) {
       cardinality += stat.cardinality;
@@ -1739,14 +1739,13 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
     // TODO: store the cumulative TExecStats instead of just cardinality
     TScanNodeCardinality stats;
     // remove alias in label_detail
-    stats.table_name = p.label_detail.substr(0, p.label_detail.find(" "));
-    stats.catalog_version = table_catalog_version.at(stats.table_name);
+    string table_name = p.label_detail.substr(0, p.label_detail.find(" "));
+    stats.catalog_version = table_catalog_version.at(table_name);
     stats.num_rows = cardinality;
-    stats.conjuncts_string = p.conjuncts_string;
-    stats.__isset.conjuncts_string = true;
-    VLOG_QUERY << "<<<HBO>>>" << stats.table_name << "|" << stats.catalog_version << "|"
+    // TODO: add num_input_files, input_file_size
+    VLOG_QUERY << "<<<HBO>>>" << table_name << "|" << stats.catalog_version << "|"
                << stats.num_rows;
-    history_stats.scan_node_cards.push_back(stats);
+    history_stats.scan_node_cards[p.hbo_hash_key] = stats;
     history_stats.__isset.scan_node_cards = true;
   }
   VLOG_QUERY << "Invoke JNI StoreExecStats";
