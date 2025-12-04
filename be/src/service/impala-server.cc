@@ -1738,9 +1738,24 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
     }
     // TODO: store the cumulative TExecStats instead of just cardinality
     TScanNodeCardinality stats;
+    // TODO: Can we get the table name from tuple_id of THdfsScanNode?
+    //  TDescriptorTable.tableDescriptors has tableName.
     // remove alias in label_detail
-    string table_name = p.label_detail.substr(0, p.label_detail.find(" "));
-    stats.catalog_version = table_catalog_version.at(table_name);
+    string table_name = p.label_detail.substr(0, p.label_detail.find(' '));
+    // table_name might be in the format "db.table.column1.column2", extract "db.table"
+    string table_key = table_name;
+    if (table_catalog_version.find(table_name) == table_catalog_version.end()) {
+      size_t first_dot = table_name.find('.');
+      if (first_dot != string::npos) {
+        size_t second_dot = table_name.find('.', first_dot + 1);
+        if (second_dot != string::npos) {
+          table_key = table_name.substr(0, second_dot);
+        }
+      }
+    }
+    DCHECK(table_catalog_version.find(table_key) != table_catalog_version.end())
+        << "Catalog version of table " << table_key << " not found";
+    stats.catalog_version = table_catalog_version.at(table_key);
     stats.num_rows = cardinality;
     // TODO: add num_input_files, input_file_size
     VLOG_QUERY << "<<<HBO>>>" << table_name << "|" << stats.catalog_version << "|"

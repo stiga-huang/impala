@@ -1870,6 +1870,9 @@ public class HdfsScanNode extends ScanNode {
   public String getHboHashString() {
     StringBuilder sb = new StringBuilder("ScanNode:");
     sb.append(tbl_.getFullName());
+    // TODO: append collection column name to get the full scan path.
+    //  E.g. "SELECT item FROM functional_parquet.arrays_big.int_array" should use
+    //  "functional_parquet.arrays_big.int_array" here.
     sb.append("|");
     List<String> partConjStrings = new ArrayList<>();
     for (Expr e: partitionConjuncts_) {
