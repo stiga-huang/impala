@@ -1976,7 +1976,7 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
       cardinality += stat.cardinality;
     }
     // TODO: store the cumulative TExecStats instead of just cardinality
-    TScanNodeCardinality stats;
+    TScanNodeRun stats = p.hdfs_scan_node.exec_stats;
     // TODO: Can we get the table name from tuple_id of THdfsScanNode?
     //  TDescriptorTable.tableDescriptors has tableName.
     // remove alias in label_detail
@@ -1999,7 +1999,10 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
     // TODO: add num_input_files, input_file_size
     VLOG_QUERY << "<<<HBO>>>" << table_name << "|" << stats.catalog_version << "|"
                << stats.num_rows;
-    history_stats.scan_node_cards[p.hbo_hash_key] = stats;
+    // TODO: insert into the value list instead of overwriting once we add
+    // canonicalization strategies.
+    // Currently this is OK since we just support identical PlanNode matching.
+    history_stats.scan_node_cards[p.hbo_hash_key] = {stats};
     history_stats.__isset.scan_node_cards = true;
   }
   VLOG_QUERY << "Invoke JNI StoreExecStats";

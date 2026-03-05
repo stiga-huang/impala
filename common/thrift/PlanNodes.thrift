@@ -29,6 +29,7 @@ include "CatalogObjects.thrift"
 include "Data.thrift"
 include "ExecStats.thrift"
 include "Exprs.thrift"
+include "HBO.thrift"
 include "Types.thrift"
 include "ExternalDataSource.thrift"
 include "ResourceProfile.thrift"
@@ -370,6 +371,9 @@ struct THdfsScanNode {
   // when new files are being added to a table. For tuple caching, this can improve the
   // cache hits by avoiding unnecessary disruption to the runtime keys.
   16: optional bool schedule_scanranges_oldest_to_newest
+
+  // Execution stats with some input info that will be stored as historical stats for HBO.
+  17: optional HBO.TScanNodeRun exec_stats
 }
 
 struct TDataSourceScanNode {

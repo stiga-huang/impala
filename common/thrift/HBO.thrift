@@ -25,16 +25,18 @@ include "Exprs.thrift"
 
 // Execution stats extracted from a query
 struct THistoricalStatsUpdate {
-  1: optional map<string, TScanNodeCardinality> scan_node_cards
+  // map from hash keys to scan node cardinalities
+  1: optional map<string, list<TScanNodeRun>> scan_node_cards
 }
 
-struct TScanNodeCardinality {
+struct TScanNodeRun {
   1: required i64 num_rows
   // TODO: add mem usage
 
   // Following fileds are used to compute confidence
-  2: required i64 catalog_version
+  2: optional i64 catalog_version
+  3: optional i64 num_input_rows
   // Only for file based tables
-  3: optional i64 num_input_files
-  4: optional i64 input_file_size
+  4: optional i64 num_input_files
+  5: optional i64 input_file_size
 }

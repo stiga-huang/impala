@@ -95,6 +95,7 @@ import org.apache.impala.thrift.TPlanNodeType;
 import org.apache.impala.thrift.TQueryOptions;
 import org.apache.impala.thrift.TReplicaPreference;
 import org.apache.impala.thrift.TRuntimeFilterType;
+import org.apache.impala.thrift.TScanNodeRun;
 import org.apache.impala.thrift.TScanRange;
 import org.apache.impala.thrift.TScanRangeLocation;
 import org.apache.impala.thrift.TScanRangeLocationList;
@@ -1709,8 +1710,11 @@ public class HdfsScanNode extends ScanNode {
       cardinality_ = totalFiles;
     }
     if (analyzer.getQueryOptions().use_historical_stats) {
-      // TODO: pass totalInputFiles and totalInputBytes to getHboHashString()
-      Long numRowsFromHBO = HistoricalStats.INSTANCE.getNumRows(getHboHashString());
+      long numInputRows = getSampledOrRawPartitions().stream()
+          .mapToLong(FeFsPartition::getNumRows)
+          .sum();
+      Long numRowsFromHBO = HistoricalStats.INSTANCE.getNumRows(
+          getHboHashString(), tbl_.getFullName(), numInputRows);
       if (numRowsFromHBO != null) {
         hboHit_ = true;
         cardinality_ = capCardinalityAtLimit(numRowsFromHBO);
@@ -1907,6 +1911,14 @@ public class HdfsScanNode extends ScanNode {
     msg.hbo_hash_key = getHboHashString();
     msg.hdfs_scan_node = new THdfsScanNode(serialCtx.translateTupleId(
         desc_.getId()).asInt(), new HashSet<>());
+    msg.hdfs_scan_node.exec_stats = new TScanNodeRun();
+    msg.hdfs_scan_node.exec_stats.setCatalog_version(tbl_.getCatalogVersion());
+    long numInputRows = getSampledOrRawPartitions().stream()
+        .mapToLong(FeFsPartition::getNumRows)
+        .sum();
+    msg.hdfs_scan_node.exec_stats.setNum_input_rows(numInputRows);
+    msg.hdfs_scan_node.exec_stats.setNum_input_files(sumValues(totalFilesPerFs_));
+    msg.hdfs_scan_node.exec_stats.setInput_file_size(sumValues(totalBytesPerFs_));
     // Register this scan node as an input for tuple caching.
     serialCtx.registerInputScanNode(this);
     if (replicaPreference_ != null) {

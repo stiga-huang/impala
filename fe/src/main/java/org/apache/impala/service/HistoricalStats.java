@@ -1,9 +1,13 @@
 package org.apache.impala.service;
 
+import java.util.List;
+
 import org.apache.impala.thrift.THistoricalStatsUpdate;
-import org.apache.impala.thrift.TScanNodeCardinality;
+import org.apache.impala.thrift.TScanNodeRun;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Preconditions;
 
 public class HistoricalStats {
   private final static Logger LOG = LoggerFactory.getLogger(HistoricalStats.class);
@@ -36,16 +40,25 @@ public class HistoricalStats {
     }
   }
 
-  public void writeScanStats(String hashKey, TScanNodeCardinality stats) {
-    cacheBackend_.put(hashKey, stats);
-    LOG.info("Write HBO key: {}, stats: {}", hashKey, stats);
+  public void writeScanStats(String hashKey, List<TScanNodeRun> runs) {
+    cacheBackend_.put(hashKey, runs);
+    LOG.info("Write HBO key: {}, stats: {}", hashKey, runs);
   }
 
-  public Long getNumRows(String hashKey) {
+  public Long getNumRows(String hashKey, String tblName, long numInputRows) {
     Object value = cacheBackend_.getIfPresent(hashKey);
-    if (value instanceof TScanNodeCardinality) {
-      TScanNodeCardinality stats = (TScanNodeCardinality) value;
-      return stats.num_rows;
+    if (value instanceof List<?>) {
+      @SuppressWarnings("unchecked")
+      List<TScanNodeRun> runs = (List<TScanNodeRun>) value;
+      Preconditions.checkState(runs.size() == 1);
+      // TODO: pick the similar run based on the input info once we add
+      // canonicalization strategies and the value list have multiple entries.
+      TScanNodeRun run = runs.get(0);
+      if (run.getNum_input_rows() != numInputRows) {
+        LOG.warn("Mismatched HBO numInputRows for {} {}: {} vs {}",
+            tblName, hashKey, run.getNum_input_rows(), numInputRows);
+      }
+      return run.getNum_input_rows();
     } else if (value != null) {
       LOG.warn("Cached value has wrong class: {}", value.getClass().getName());
     }
