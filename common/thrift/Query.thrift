@@ -819,7 +819,10 @@ struct TQueryOptions {
   201: optional PlanNodes.TPlannerType fallback_planner = TPlannerType.ORIGINAL
 
   // See comment in ImpalaService.thrift
-  202: optional bool enable_hbo = false;
+  202: optional bool use_historical_stats = true;
+
+  // See comment in ImpalaService.thrift
+  203: optional bool store_historical_stats = true;
 }
 
 // Impala currently has three types of sessions: Beeswax, HiveServer2 and external

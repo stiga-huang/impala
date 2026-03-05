@@ -1708,7 +1708,7 @@ public class HdfsScanNode extends ScanNode {
       inputCardinality_ = totalFiles;
       cardinality_ = totalFiles;
     }
-    if (analyzer.getQueryOptions().enable_hbo) {
+    if (analyzer.getQueryOptions().use_historical_stats) {
       // TODO: pass totalInputFiles and totalInputBytes to getHboHashString()
       Long numRowsFromHBO = HistoricalStats.INSTANCE.getNumRows(getHboHashString());
       if (numRowsFromHBO != null) {

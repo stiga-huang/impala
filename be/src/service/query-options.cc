@@ -1449,8 +1449,12 @@ Status impala::SetQueryOption(TImpalaQueryOptions::type option, const string& va
         query_options->__set_fallback_planner(planner_type);
         break;
       }
-      case TImpalaQueryOptions::ENABLE_HBO: {
-        query_options->__set_enable_hbo(IsTrue(value));
+      case TImpalaQueryOptions::USE_HISTORICAL_STATS: {
+        query_options->__set_use_historical_stats(IsTrue(value));
+        break;
+      }
+      case TImpalaQueryOptions::STORE_HISTORICAL_STATS: {
+        query_options->__set_store_historical_stats(IsTrue(value));
         break;
       }
       default:

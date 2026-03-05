@@ -1090,7 +1090,10 @@ enum TImpalaQueryOptions {
   FALLBACK_PLANNER = 200
 
   // When true, try to use historical execution stats in query planning.
-  ENABLE_HBO = 201
+  USE_HISTORICAL_STATS = 201
+
+  // When true, store historical execution stats asynchronously after the query finishes.
+  STORE_HISTORICAL_STATS = 202
 }
 
 // The summary of a DML statement.

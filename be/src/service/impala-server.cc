@@ -1661,6 +1661,10 @@ void ImpalaServer::UpdateExecSummary(const QueryHandle& query_handle) const {
 }
 
 Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
+  if (!query_handle->query_options().store_historical_stats) {
+    return Status::OK();
+  }
+
   //const RuntimeProfile* profile = query_handle->profile();
   const TExecRequest& exec_req = query_handle->exec_request();
   shared_ptr<QueryStateRecord> query_record = nullptr;
