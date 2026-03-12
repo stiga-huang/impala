@@ -874,7 +874,10 @@ struct TPlanNode {
 
   31: optional TPaimonScanNode paimon_table_scan_node
 
-  32: optional string hbo_hash_key
+  // List of hash keys for History-Based Optimization (HBO).
+  // Each key corresponds to a different canonicalization strategy level,
+  // ordered from most accurate to most aggressive matching.
+  32: optional list<string> hbo_hash_keys
 }
 
 // A flattened representation of a tree of PlanNodes, obtained by depth-first

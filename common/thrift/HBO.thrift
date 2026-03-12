@@ -23,12 +23,6 @@ namespace java org.apache.impala.thrift
 
 include "Exprs.thrift"
 
-// Execution stats extracted from a query
-struct THistoricalStatsUpdate {
-  // map from hash keys to scan node cardinalities
-  1: optional map<string, list<TScanNodeRun>> scan_node_cards
-}
-
 struct TScanNodeRun {
   1: required i64 num_rows
   // TODO: add mem usage
@@ -39,4 +33,16 @@ struct TScanNodeRun {
   // Only for file based tables
   4: optional i64 num_input_files
   5: optional i64 input_file_size
+}
+
+struct TScanNodeRunWithKeys {
+  1: required TScanNodeRun run
+  2: required list<string> hash_keys
+}
+
+// Execution stats extracted from a query
+struct THistoricalStatsUpdate {
+  // List of scan node execution stats with their corresponding HBO hash strings for different
+  // canonicalization strategies.
+  1: optional list<TScanNodeRunWithKeys> scan_node_runs
 }

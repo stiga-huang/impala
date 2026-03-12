@@ -1970,7 +1970,7 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
       if (has_effective_filters) continue;
     }
 
-    VLOG_QUERY << "<<<HBO>>>hash_key: " << p.hbo_hash_key;
+    // Build the stats object
     int64_t cardinality = 0;
     for (const TExecStats& stat: exec_summaries[p.node_id].exec_stats) {
       cardinality += stat.cardinality;
@@ -1999,11 +1999,15 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
     // TODO: add num_input_files, input_file_size
     VLOG_QUERY << "<<<HBO>>>" << table_name << "|" << stats.catalog_version << "|"
                << stats.num_rows;
-    // TODO: insert into the value list instead of overwriting once we add
-    // canonicalization strategies.
-    // Currently this is OK since we just support identical PlanNode matching.
-    history_stats.scan_node_cards[p.hbo_hash_key] = {stats};
-    history_stats.__isset.scan_node_cards = true;
+
+    // Store stats under all hash keys (all canonicalization strategies)
+    if (p.__isset.hbo_hash_keys && !p.hbo_hash_keys.empty()) {
+      TScanNodeRunWithKeys run_with_keys;
+      run_with_keys.run = stats;
+      run_with_keys.hash_keys = p.hbo_hash_keys;
+      history_stats.scan_node_runs.push_back(run_with_keys);
+      history_stats.__isset.scan_node_runs = true;
+    }
   }
   VLOG_QUERY << "Invoke JNI StoreExecStats";
   return exec_env_->frontend()->StoreExecStats(history_stats);

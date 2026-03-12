@@ -1714,7 +1714,7 @@ public class HdfsScanNode extends ScanNode {
           .mapToLong(FeFsPartition::getNumRows)
           .sum();
       Long numRowsFromHBO = HistoricalStats.INSTANCE.getNumRows(
-          getHboHashString(), tbl_.getFullName(), numInputRows);
+          generateHboHashStrings(), tbl_.getFullName(), numInputRows);
       if (numRowsFromHBO != null) {
         hboHit_ = true;
         cardinality_ = capCardinalityAtLimit(numRowsFromHBO);
@@ -1871,44 +1871,71 @@ public class HdfsScanNode extends ScanNode {
     Preconditions.checkState(false, "Unexpected use of old toThrift() signature.");
   }
 
-  public String getHboHashString() {
+  /**
+   * Returns a list of hash strings for History-Based Optimization (HBO).
+   * Each string corresponds to a different canonicalization strategy, ordered
+   * from most accurate (EXPR_REWRITE) to most aggressive (IGNORE_EQUALITY_CONSTANTS).
+   * The list allows HBO to try multiple matching strategies with increasing tolerance.
+   */
+  public List<String> generateHboHashStrings() {
+    List<String> hashStrings = new ArrayList<>();
+
+    // Generate hash string for each canonicalization strategy
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      String hashString = generateHboHashString(strategy);
+      LOG.info("<<<HBO>>> Strategy {} hash: {}", strategy, hashString);
+      if (hashStrings.contains(hashString)) {
+        LOG.debug("Ignoring duplicate hash string for strategy {}: {}",
+            strategy, hashString);
+      } else {
+        hashStrings.add(hashString);
+      }
+    }
+
+    return hashStrings;
+  }
+
+  /**
+   * Generates a single hash string using the specified canonicalization strategy.
+   */
+  private String generateHboHashString(CanonicalizationStrategy strategy) {
     StringBuilder sb = new StringBuilder("ScanNode:");
     sb.append(tbl_.getFullName());
     // TODO: append collection column name to get the full scan path.
     //  E.g. "SELECT item FROM functional_parquet.arrays_big.int_array" should use
     //  "functional_parquet.arrays_big.int_array" here.
     sb.append("|");
-    List<String> partConjStrings = new ArrayList<>();
-    for (Expr e: partitionConjuncts_) {
-      // TODO: cnonicalize partition conjuncts
-      partConjStrings.add(e.toSql(ToSqlOptions.FOR_HBO));
-    }
-    Collections.sort(partConjStrings);
 
-    List<String> conjStrings = new ArrayList<>();
-    for (Expr e: conjuncts_) {
-      conjStrings.add(e.toSql(ToSqlOptions.FOR_HBO));
-    }
-    Collections.sort(conjStrings);
+    // Canonicalize partition conjuncts
+    List<String> partConjStrings =
+        ExprCanonicalizer.canonicalizeExprs(partitionConjuncts_, tbl_, strategy);
 
+    // Canonicalize regular conjuncts
+    List<String> conjStrings =
+        ExprCanonicalizer.canonicalizeExprs(conjuncts_, tbl_, strategy);
+
+    // Append canonicalized strings
     for (String s: partConjStrings) {
       sb.append(s);
       sb.append("|");
-      LOG.info("<<<HBO>>> PARTITION CONJUNCT STR: {}", s);
+      LOG.debug("<<<HBO>>> PARTITION CONJUNCT STR ({}): {}", strategy, s);
     }
     for (String s: conjStrings) {
       sb.append(s);
       sb.append("|");
-      LOG.info("<<<HBO>>> CONJUNCT STR: {}", s);
+      LOG.debug("<<<HBO>>> CONJUNCT STR ({}): {}", strategy, s);
     }
+
     Hasher hasher = Hashing.murmur3_128().newHasher();
-    hasher.putUnencodedChars(sb.toString());
+    String orgStr = sb.toString();
+    LOG.debug("<<<HBO>>> Key string ({}): {}", strategy, orgStr);
+    hasher.putUnencodedChars(orgStr);
     return hasher.hash().toString();
   }
 
   @Override
   protected void toThrift(TPlanNode msg, ThriftSerializationCtx serialCtx) {
-    msg.hbo_hash_key = getHboHashString();
+    msg.setHbo_hash_keys(generateHboHashStrings());
     msg.hdfs_scan_node = new THdfsScanNode(serialCtx.translateTupleId(
         desc_.getId()).asInt(), new HashSet<>());
     msg.hdfs_scan_node.exec_stats = new TScanNodeRun();
