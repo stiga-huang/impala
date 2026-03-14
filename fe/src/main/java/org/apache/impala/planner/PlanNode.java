@@ -68,6 +68,8 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
 
 /**
  * Each PlanNode represents a single relational operator
@@ -977,6 +979,63 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
    * into pipelined units for resource estimation.
    */
   public boolean isBlockingNode() { return false; }
+
+  /**
+   * Generates an HBO key string for this node, or null if HBO is not supported.
+   * This key string represents the logical characteristics that identify similar
+   * operations that could benefit from shared historical statistics.
+   *
+   * The key string is regenerated each time based on the current state of the node,
+   * since fields may be modified and computeStats() called again.
+   *
+   * Nodes that support HBO should override this method to return a descriptive
+   * key string (not hashed). The key will be incorporated into parent nodes'
+   * HBO keys to create a hierarchical identification system.
+   *
+   * @return A key string identifying this node's characteristics, or null if
+   *         HBO is not supported for this node type.
+   */
+  public String generateHboKeyString(CanonicalizationStrategy strategy) {
+    return null;
+  }
+
+  /**
+   * Generates a single hash string using the specified canonicalization strategy.
+   */
+  public String generateHboHashString(CanonicalizationStrategy strategy) {
+    Hasher hasher = Hashing.murmur3_128().newHasher();
+    String keyString = generateHboKeyString(strategy);
+    if (keyString == null) return null;
+    LOG.debug("<<<HBO>>> Key string ({}): {}", strategy, keyString);
+    hasher.putUnencodedChars(keyString);
+    return hasher.hash().toString();
+  }
+
+  /**
+   * Returns a list of hash strings for History-Based Optimization (HBO).
+   * Each string corresponds to a different canonicalization strategy, ordered
+   * from most accurate (EXPR_REWRITE) to most aggressive (IGNORE_EQUALITY_CONSTANTS).
+   * The list allows HBO to try multiple matching strategies with increasing tolerance.
+   */
+  public List<String> generateHboHashStrings() {
+    List<String> hashStrings = new ArrayList<>();
+
+    // Generate hash string for each canonicalization strategy
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      String hashString = generateHboHashString(strategy);
+      // Break if the node doesn't support HBO.
+      if (hashString == null) break;
+      LOG.info("<<<HBO>>> Strategy {} hash: {}", strategy, hashString);
+      if (hashStrings.contains(hashString)) {
+        LOG.debug("Ignoring duplicate hash string for strategy {}: {}",
+            strategy, hashString);
+      } else {
+        hashStrings.add(hashString);
+      }
+    }
+
+    return hashStrings;
+  }
 
   /**
    * Fills in 'pipelines_' with the pipelines that this PlanNode is a member of.

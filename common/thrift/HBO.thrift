@@ -23,26 +23,26 @@ namespace java org.apache.impala.thrift
 
 include "Exprs.thrift"
 
-struct TScanNodeRun {
+struct TPlanNodeRun {
   1: required i64 num_rows
   // TODO: add mem usage
 
   // Following fileds are used to compute confidence
   2: optional i64 catalog_version
   3: optional i64 num_input_rows
-  // Only for file based tables
+  // Only for file based table scans
   4: optional i64 num_input_files
   5: optional i64 input_file_size
 }
 
-struct TScanNodeRunWithKeys {
-  1: required TScanNodeRun run
+struct TPlanNodeRunWithKeys {
+  1: required TPlanNodeRun run
   2: required list<string> hash_keys
 }
 
 // Execution stats extracted from a query
 struct THistoricalStatsUpdate {
-  // List of scan node execution stats with their corresponding HBO hash strings for different
+  // List of plan node execution stats with their corresponding HBO hash strings for different
   // canonicalization strategies.
-  1: optional list<TScanNodeRunWithKeys> scan_node_runs
+  1: optional list<TPlanNodeRunWithKeys> plan_node_runs
 }

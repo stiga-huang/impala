@@ -1453,15 +1453,15 @@ Status ImpalaServer::ExecuteInternal(const TQueryCtx& query_ctx,
   return Status::OK();
 }
 
-vector<TPlanNode> ImpalaServer::GetScanNodes(const TExecRequest& exec_request) {
+vector<TPlanNode> ImpalaServer::GetPlanNodesWithHboKeys(const TExecRequest& exec_request) {
   vector<TPlanFragment> fragments;
-  vector<TPlanNode> scan_nodes;
+  vector<TPlanNode> nodes_with_hbo_keys;
   int num_plan_nodes = 0;
   for (const TPlanExecInfo& plan_exec_info: exec_request.query_exec_request.plan_exec_info) {
     for (const TPlanFragment& fragment: plan_exec_info.fragments) {
       for (const TPlanNode& node: fragment.plan.nodes) {
-        if (node.node_type == TPlanNodeType::HDFS_SCAN_NODE) {
-          scan_nodes.push_back(node);
+        if (node.__isset.hbo_hash_keys && !node.hbo_hash_keys.empty()) {
+          nodes_with_hbo_keys.push_back(node);
         }
         if (node.node_type != TPlanNodeType::EXCHANGE_NODE) {
           num_plan_nodes++;
@@ -1470,8 +1470,8 @@ vector<TPlanNode> ImpalaServer::GetScanNodes(const TExecRequest& exec_request) {
     }
   }
   VLOG_QUERY << "<<<HBO>>>planNodes count: " << num_plan_nodes;
-  VLOG_QUERY << "<<<HBO>>>scanNodes count: " << scan_nodes.size();
-  return scan_nodes;
+  VLOG_QUERY << "<<<HBO>>>nodes with hbo_hash_keys count: " << nodes_with_hbo_keys.size();
+  return nodes_with_hbo_keys;
 }
 
 void ImpalaServer::PrepareQueryContext(TQueryCtx* query_ctx) {
@@ -1725,12 +1725,19 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
   };
   process_exec_profile(query_handle->GetCoordinator()->query_profile());
 
-  // Step 1: Build a map from TPlanNodeId to TPlanNode reference
+  // Step 1: Build a map from TPlanNodeId to TPlanNode reference and
+  // a map from parent node_id to first child node_id
   map<TPlanNodeId, const TPlanNode*> node_map;
+  map<TPlanNodeId, TPlanNodeId> node_to_first_child;
   for (const TPlanExecInfo& plan_exec_info: exec_req.query_exec_request.plan_exec_info) {
     for (const TPlanFragment& fragment: plan_exec_info.fragments) {
-      for (const TPlanNode& node: fragment.plan.nodes) {
+      for (size_t i = 0; i < fragment.plan.nodes.size(); ++i) {
+        const TPlanNode& node = fragment.plan.nodes[i];
         node_map[node.node_id] = &node;
+        // First child is at index i+1 in the flattened array
+        if (node.num_children > 0 && i + 1 < fragment.plan.nodes.size()) {
+          node_to_first_child[node.node_id] = fragment.plan.nodes[i + 1].node_id;
+        }
       }
     }
   }
@@ -1949,7 +1956,7 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
              << nodes_with_external_filters;
 
   THistoricalStatsUpdate history_stats;
-  for (const TPlanNode& p : GetScanNodes(exec_req)) {
+  for (const TPlanNode& p : GetPlanNodesWithHboKeys(exec_req)) {
     // Skip nodes if runtime filters have filtered some rows. Those rows are ignored
     // since they can't pass later join nodes. Currently don't have context to track
     // this. On the other hand, the output cardinality depends on when the runtime
@@ -1970,43 +1977,65 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
       if (has_effective_filters) continue;
     }
 
-    // Build the stats object
+    // TODO: store the cumulative TExecStats instead of just cardinality
     int64_t cardinality = 0;
     for (const TExecStats& stat: exec_summaries[p.node_id].exec_stats) {
       cardinality += stat.cardinality;
     }
-    // TODO: store the cumulative TExecStats instead of just cardinality
-    TScanNodeRun stats = p.hdfs_scan_node.exec_stats;
-    // TODO: Can we get the table name from tuple_id of THdfsScanNode?
-    //  TDescriptorTable.tableDescriptors has tableName.
-    // remove alias in label_detail
-    string table_name = p.label_detail.substr(0, p.label_detail.find(' '));
-    // table_name might be in the format "db.table.column1.column2", extract "db.table"
-    string table_key = table_name;
-    if (table_catalog_version.find(table_name) == table_catalog_version.end()) {
-      size_t first_dot = table_name.find('.');
-      if (first_dot != string::npos) {
-        size_t second_dot = table_name.find('.', first_dot + 1);
-        if (second_dot != string::npos) {
-          table_key = table_name.substr(0, second_dot);
+
+    TPlanNodeRun stats;
+    // For HDFS scan nodes, we can use the pre-populated exec_stats if available
+    if (p.node_type == TPlanNodeType::HDFS_SCAN_NODE &&
+        p.__isset.hdfs_scan_node && p.hdfs_scan_node.__isset.exec_stats) {
+      stats = p.hdfs_scan_node.exec_stats;
+      // TODO: Can we get the table name from tuple_id of THdfsScanNode?
+      //  TDescriptorTable.tableDescriptors has tableName.
+      // remove alias in label_detail
+      string table_name = p.label_detail.substr(0, p.label_detail.find(' '));
+      // table_name might be in the format "db.table.column1.column2", extract "db.table"
+      string table_key = table_name;
+      if (table_catalog_version.find(table_name) == table_catalog_version.end()) {
+        size_t first_dot = table_name.find('.');
+        if (first_dot != string::npos) {
+          size_t second_dot = table_name.find('.', first_dot + 1);
+          if (second_dot != string::npos) {
+            table_key = table_name.substr(0, second_dot);
+          }
         }
       }
+      if (table_catalog_version.find(table_key) != table_catalog_version.end()) {
+        stats.catalog_version = table_catalog_version.at(table_key);
+      }
+      VLOG_QUERY << "<<<HBO>>>ScanNode " << table_name << "|" << stats.catalog_version << "|"
+                 << stats.num_rows;
+    } else {
+      // For non-scan nodes or scan nodes without exec_stats, create a minimal TPlanNodeRun
+      stats.num_rows = cardinality;
+      // Set num_input_rows as the cardinality of the first child
+      stats.num_input_rows = 0;
+      stats.__isset.num_input_rows = true;
+      if (node_to_first_child.find(p.node_id) != node_to_first_child.end()) {
+        TPlanNodeId first_child_id = node_to_first_child[p.node_id];
+        if (exec_summaries.find(first_child_id) != exec_summaries.end()) {
+          int64_t first_child_cardinality = 0;
+          for (const TExecStats& stat: exec_summaries[first_child_id].exec_stats) {
+            first_child_cardinality += stat.cardinality;
+          }
+          stats.num_input_rows = first_child_cardinality;
+        }
+      }
+      VLOG_QUERY << "<<<HBO>>>Node " << p.node_id << " (" << p.label << ")|"
+                 << stats.num_rows << "|input=" << stats.num_input_rows;
     }
-    DCHECK(table_catalog_version.find(table_key) != table_catalog_version.end())
-        << "Catalog version of table " << table_key << " not found";
-    stats.catalog_version = table_catalog_version.at(table_key);
     stats.num_rows = cardinality;
-    // TODO: add num_input_files, input_file_size
-    VLOG_QUERY << "<<<HBO>>>" << table_name << "|" << stats.catalog_version << "|"
-               << stats.num_rows;
 
     // Store stats under all hash keys (all canonicalization strategies)
     if (p.__isset.hbo_hash_keys && !p.hbo_hash_keys.empty()) {
-      TScanNodeRunWithKeys run_with_keys;
+      TPlanNodeRunWithKeys run_with_keys;
       run_with_keys.run = stats;
       run_with_keys.hash_keys = p.hbo_hash_keys;
-      history_stats.scan_node_runs.push_back(run_with_keys);
-      history_stats.__isset.scan_node_runs = true;
+      history_stats.plan_node_runs.push_back(run_with_keys);
+      history_stats.__isset.plan_node_runs = true;
     }
   }
   VLOG_QUERY << "Invoke JNI StoreExecStats";

@@ -3,8 +3,8 @@ package org.apache.impala.service;
 import java.util.List;
 
 import org.apache.impala.thrift.THistoricalStatsUpdate;
-import org.apache.impala.thrift.TScanNodeRun;
-import org.apache.impala.thrift.TScanNodeRunWithKeys;
+import org.apache.impala.thrift.TPlanNodeRun;
+import org.apache.impala.thrift.TPlanNodeRunWithKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,12 +36,12 @@ public class HistoricalStats {
   }
 
   public void writeStats(THistoricalStatsUpdate stats) {
-    for (TScanNodeRunWithKeys runWithKeys : stats.scan_node_runs) {
+    for (TPlanNodeRunWithKeys runWithKeys : stats.plan_node_runs) {
       writeScanStats(runWithKeys.run, runWithKeys.hash_keys);
     }
   }
 
-  public void writeScanStats(TScanNodeRun currRun, List<String> hashKeys) {
+  public void writeScanStats(TPlanNodeRun currRun, List<String> hashKeys) {
     for (String hashKey : hashKeys) {
       Object value = cacheBackend_.getIfPresent(hashKey);
       if (value == null) {
@@ -49,9 +49,9 @@ public class HistoricalStats {
         LOG.debug("Write HBO key: {}, stats: {}", hashKey, currRun);
       } else if (value instanceof List<?>) {
         @SuppressWarnings("unchecked")
-        List<TScanNodeRun> runs = (List<TScanNodeRun>) value;
+        List<TPlanNodeRun> runs = (List<TPlanNodeRun>) value;
         boolean foundSimilar = false;
-        for (TScanNodeRun run : runs) {
+        for (TPlanNodeRun run : runs) {
           long currInputRows = currRun.num_input_rows;
           long historicalInputRows = run.num_input_rows;
           if (Math.abs(historicalInputRows - currInputRows) / currInputRows <= 0.1) {
@@ -90,8 +90,8 @@ public class HistoricalStats {
       Object value = cacheBackend_.getIfPresent(hashKey);
       if (value instanceof List<?>) {
         @SuppressWarnings("unchecked")
-        List<TScanNodeRun> runs = (List<TScanNodeRun>) value;
-        for (TScanNodeRun run : runs) {
+        List<TPlanNodeRun> runs = (List<TPlanNodeRun>) value;
+        for (TPlanNodeRun run : runs) {
           long historicalNumInputRows = run.getNum_input_rows();
           // TODO: make 0.1 configurable
           if (Math.abs(historicalNumInputRows - numInputRows) / numInputRows > 0.1) {
@@ -99,8 +99,8 @@ public class HistoricalStats {
                 tblName, i, hashKey, historicalNumInputRows, numInputRows);
             continue;
           }
-          LOG.info("HBO cache hit for {} using strategy level {} (key: {}): cardinality={}",
-              tblName, i, hashKey, run.getNum_rows());
+          LOG.info("HBO cache hit for {} using strategy level {} (key: {}, numInputRows: {}): cardinality={}",
+              tblName, i, hashKey, numInputRows, run.getNum_rows());
           return run.getNum_rows();
         }
       } else if (value != null) {

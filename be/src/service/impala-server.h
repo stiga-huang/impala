@@ -1258,7 +1258,7 @@ class ImpalaServer : public ImpalaServiceIf,
   TUniqueId RandomUniqueID();
 
   Status StoreExecutionStats(const QueryHandle& query_handle);
-  std::vector<TPlanNode> GetScanNodes(const TExecRequest& exec_request);
+  std::vector<TPlanNode> GetPlanNodesWithHboKeys(const TExecRequest& exec_request);
 
   /// Logger for writing encoded query profiles, one per line with the following format:
   /// <ms-since-epoch> <query-id> <thrift query profile URL encoded and gzipped>

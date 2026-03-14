@@ -314,6 +314,8 @@ public class SlotRef extends Expr {
   @Override
   public String toSqlImpl(ToSqlOptions options) {
     if (options.showForHbo()) {
+      Preconditions.checkState(label_ != null || rawPath_ != null);
+      if (rawPath_ == null) return label_;
       return ToSqlUtils.getIdentSql(rawPath_.get(rawPath_.size() - 1));
     }
     if (label_ != null) return label_;

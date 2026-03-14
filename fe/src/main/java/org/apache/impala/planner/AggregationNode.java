@@ -42,6 +42,7 @@ import org.apache.impala.analysis.TupleId;
 import org.apache.impala.analysis.ValidTupleIdExpr;
 import org.apache.impala.common.InternalException;
 import org.apache.impala.common.ThriftSerializationCtx;
+import org.apache.impala.service.HistoricalStats;
 import org.apache.impala.thrift.QueryConstants;
 import org.apache.impala.thrift.TAggregationNode;
 import org.apache.impala.thrift.TAggregator;
@@ -373,6 +374,28 @@ public class AggregationNode extends PlanNode implements SpillableOperator {
     if (!estimatePreaggDuplicate) {
       // IMPALA-2581: preAgg node can have limit.
       cardinality_ = capCardinalityAtLimit(cardinality_);
+    }
+
+    // Try to get cardinality from HBO
+    List<String> hboHashKeys = generateHboHashStrings();
+    if (!hboHashKeys.isEmpty()) {
+      PlanNode child = getChild(0);
+      while (child instanceof ExchangeNode || child instanceof AggregationNode) {
+        child = child.getChild(0);
+      }
+      if (child instanceof HdfsScanNode) {
+        long numInputRows = ((HdfsScanNode) child).getNumInputRows();
+        Long hboCardinality = HistoricalStats.INSTANCE.getNumRows(
+            hboHashKeys, getDisplayLabel(), numInputRows);
+        if (hboCardinality != null) {
+          cardinality_ = hboCardinality;
+          hboHit_ = true;
+        } else {
+          LOG.debug("No HBO stats for {}. Keys: {}", getDisplayLabel(), hboHashKeys);
+        }
+      } else {
+        // TODO: extend HistoricalStats.getNumRows() to get a list of numInputRows for all scan nodes.
+      }
     }
 
     if (LOG.isTraceEnabled()) {
@@ -781,6 +804,74 @@ public class AggregationNode extends PlanNode implements SpillableOperator {
     return result;
   }
 
+  /**
+   * Generates an HBO key string for this aggregation node, or null if HBO is not supported.
+   * Returns null if any child node doesn't support HBO.
+   */
+  @Override
+  public String generateHboKeyString(CanonicalizationStrategy strategy) {
+    // CRITICAL: If any child doesn't support HBO, return null
+    List<String> childKeys = new ArrayList<>();
+    for (PlanNode child : children_) {
+      if (child instanceof ExchangeNode) {
+        child = child.getChild(0);
+      }
+      String key = child.generateHboKeyString(strategy);
+      if (key == null) {
+        LOG.debug("<<<HBO>>> Child node {} of {} doesn't support HBO.",
+            child.getDisplayLabel(), getDisplayLabel());
+        return null;
+      }
+      childKeys.add(key);
+    }
+
+    // Build key string from CURRENT state (no caching needed)
+    StringBuilder sb = new StringBuilder("AggregationNode:");
+
+    // Aggregation phase
+    sb.append(aggPhase_.name()).append("|");
+
+    // Include grouping set flag (affects cardinality)
+    sb.append("groupingSet:").append(multiAggInfo_.getIsGroupingSet()).append("|");
+
+    // Grouping expressions for each aggregation class
+    // Note: For DISTINCT aggs, groupingExprs already includes DISTINCT params
+    // Note: Aggregate functions (SUM, COUNT, etc.) are NOT included - they don't affect cardinality
+    for (int i = 0; i < aggInfos_.size(); i++) {
+      AggregateInfo aggInfo = aggInfos_.get(i);
+      sb.append("AggClass[").append(i).append(":");
+
+      // Grouping expressions (includes DISTINCT params if applicable)
+      List<String> groupingStrs = ExprCanonicalizer.canonicalizeExprs(
+          aggInfo.getGroupingExprs(), CanonicalizationStrategy.EXPR_REWRITE);
+      sb.append("GROUP:").append(String.join(",", groupingStrs));
+
+      // Include DISTINCT flag (affects phase structure and cardinality)
+      sb.append("|distinct:").append(aggInfo.isDistinctAgg());
+
+      sb.append("]|");
+    }
+
+    // HAVING expressions
+    if (!conjuncts_.isEmpty()) {
+      List<String> conjunctStrs = ExprCanonicalizer.canonicalizeExprs(
+          conjuncts_, CanonicalizationStrategy.EXPR_REWRITE);
+      sb.append("HAVING:").append(String.join(",", conjunctStrs)).append("|");
+    }
+
+    // Children keys
+    for (String childKey : childKeys) {
+      sb.append("CHILD:").append(childKey).append("|");
+    }
+
+    // Execution characteristics
+    sb.append("preagg:").append(isPreagg_)
+      .append("|streaming:").append(useStreamingPreagg_)
+      .append("|finalize:").append(needsFinalize_);
+
+    return sb.toString();
+  }
+
   @Override
   protected void toThrift(TPlanNode msg) {
     Preconditions.checkState(false, "Unexpected use of old toThrift() signature.");
@@ -790,6 +881,16 @@ public class AggregationNode extends PlanNode implements SpillableOperator {
   protected void toThrift(TPlanNode msg, ThriftSerializationCtx serialCtx) {
     msg.agg_node = new TAggregationNode();
     msg.node_type = TPlanNodeType.AGGREGATION_NODE;
+
+    // Add HBO hash keys (only if supported and not for tuple cache)
+    // TODO: can we ignore this check?
+    if (!serialCtx.isTupleCache()) {
+      List<String> hboHashKeys = generateHboHashStrings();
+      if (!hboHashKeys.isEmpty()) {
+        msg.setHbo_hash_keys(hboHashKeys);
+      }
+    }
+
     boolean replicateInput = aggPhase_ == AggPhase.FIRST && aggInfos_.size() > 1;
     msg.agg_node.setReplicate_input(replicateInput);
     // Normalize input cardinality estimate for caching in case stats change.

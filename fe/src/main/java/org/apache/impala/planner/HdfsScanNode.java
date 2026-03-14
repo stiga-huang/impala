@@ -31,7 +31,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -50,7 +49,6 @@ import org.apache.impala.analysis.SlotId;
 import org.apache.impala.analysis.SlotRef;
 import org.apache.impala.analysis.TableRef;
 import org.apache.impala.analysis.TableSampleClause;
-import org.apache.impala.analysis.ToSqlOptions;
 import org.apache.impala.analysis.TupleDescriptor;
 import org.apache.impala.analysis.TupleId;
 import org.apache.impala.catalog.Column;
@@ -95,7 +93,7 @@ import org.apache.impala.thrift.TPlanNodeType;
 import org.apache.impala.thrift.TQueryOptions;
 import org.apache.impala.thrift.TReplicaPreference;
 import org.apache.impala.thrift.TRuntimeFilterType;
-import org.apache.impala.thrift.TScanNodeRun;
+import org.apache.impala.thrift.TPlanNodeRun;
 import org.apache.impala.thrift.TScanRange;
 import org.apache.impala.thrift.TScanRangeLocation;
 import org.apache.impala.thrift.TScanRangeLocationList;
@@ -116,8 +114,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-import com.google.common.hash.Hasher;
-import com.google.common.hash.Hashing;
 
 /**
  * Scan of a single table.
@@ -438,6 +434,12 @@ public class HdfsScanNode extends ScanNode {
   // Return sampledPartitions_ if not null. Otherwise, return partitions_.
   private List<FeFsPartition> getSampledOrRawPartitions() {
     return sampledPartitions_ == null ? partitions_ : sampledPartitions_;
+  }
+
+  public long getNumInputRows() {
+    return getSampledOrRawPartitions().stream()
+        .mapToLong(FeFsPartition::getNumRows)
+        .sum();
   }
 
   /**
@@ -1710,11 +1712,8 @@ public class HdfsScanNode extends ScanNode {
       cardinality_ = totalFiles;
     }
     if (analyzer.getQueryOptions().use_historical_stats) {
-      long numInputRows = getSampledOrRawPartitions().stream()
-          .mapToLong(FeFsPartition::getNumRows)
-          .sum();
       Long numRowsFromHBO = HistoricalStats.INSTANCE.getNumRows(
-          generateHboHashStrings(), tbl_.getFullName(), numInputRows);
+          generateHboHashStrings(), tbl_.getFullName(), getNumInputRows());
       if (numRowsFromHBO != null) {
         hboHit_ = true;
         cardinality_ = capCardinalityAtLimit(numRowsFromHBO);
@@ -1872,33 +1871,11 @@ public class HdfsScanNode extends ScanNode {
   }
 
   /**
-   * Returns a list of hash strings for History-Based Optimization (HBO).
-   * Each string corresponds to a different canonicalization strategy, ordered
-   * from most accurate (EXPR_REWRITE) to most aggressive (IGNORE_EQUALITY_CONSTANTS).
-   * The list allows HBO to try multiple matching strategies with increasing tolerance.
+   * Generates an unhashed HBO key string for this scan node.
+   * This key string can be incorporated by parent nodes into their HBO keys.
    */
-  public List<String> generateHboHashStrings() {
-    List<String> hashStrings = new ArrayList<>();
-
-    // Generate hash string for each canonicalization strategy
-    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
-      String hashString = generateHboHashString(strategy);
-      LOG.info("<<<HBO>>> Strategy {} hash: {}", strategy, hashString);
-      if (hashStrings.contains(hashString)) {
-        LOG.debug("Ignoring duplicate hash string for strategy {}: {}",
-            strategy, hashString);
-      } else {
-        hashStrings.add(hashString);
-      }
-    }
-
-    return hashStrings;
-  }
-
-  /**
-   * Generates a single hash string using the specified canonicalization strategy.
-   */
-  private String generateHboHashString(CanonicalizationStrategy strategy) {
+  @Override
+  public String generateHboKeyString(CanonicalizationStrategy strategy) {
     StringBuilder sb = new StringBuilder("ScanNode:");
     // Use the full path including collection columns if available
     if (desc_.getPath() != null) {
@@ -1908,15 +1885,12 @@ public class HdfsScanNode extends ScanNode {
     }
     sb.append("|");
 
-    // Canonicalize partition conjuncts
+    // Canonicalize partition conjuncts and regular conjuncts.
     List<String> partConjStrings =
         ExprCanonicalizer.canonicalizeExprs(partitionConjuncts_, tbl_, strategy);
-
-    // Canonicalize regular conjuncts
     List<String> conjStrings =
         ExprCanonicalizer.canonicalizeExprs(conjuncts_, tbl_, strategy);
 
-    // Append canonicalized strings
     for (String s: partConjStrings) {
       sb.append(s);
       sb.append("|");
@@ -1928,11 +1902,7 @@ public class HdfsScanNode extends ScanNode {
       LOG.debug("<<<HBO>>> CONJUNCT STR ({}): {}", strategy, s);
     }
 
-    Hasher hasher = Hashing.murmur3_128().newHasher();
-    String orgStr = sb.toString();
-    LOG.debug("<<<HBO>>> Key string ({}): {}", strategy, orgStr);
-    hasher.putUnencodedChars(orgStr);
-    return hasher.hash().toString();
+    return sb.toString();
   }
 
   @Override
@@ -1940,7 +1910,7 @@ public class HdfsScanNode extends ScanNode {
     msg.setHbo_hash_keys(generateHboHashStrings());
     msg.hdfs_scan_node = new THdfsScanNode(serialCtx.translateTupleId(
         desc_.getId()).asInt(), new HashSet<>());
-    msg.hdfs_scan_node.exec_stats = new TScanNodeRun();
+    msg.hdfs_scan_node.exec_stats = new TPlanNodeRun();
     msg.hdfs_scan_node.exec_stats.setCatalog_version(tbl_.getCatalogVersion());
     long numInputRows = getSampledOrRawPartitions().stream()
         .mapToLong(FeFsPartition::getNumRows)

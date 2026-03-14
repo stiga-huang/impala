@@ -49,7 +49,7 @@ public class ExprCanonicalizer {
 
   /**
    * Canonicalizes a list of expressions according to the specified strategy.
-   * 
+   *
    * @param exprs List of expressions to canonicalize
    * @param table The table being scanned (used to identify partition columns)
    * @param strategy The canonicalization strategy to apply
@@ -58,11 +58,12 @@ public class ExprCanonicalizer {
   public static List<String> canonicalizeExprs(List<Expr> exprs, FeTable table,
       CanonicalizationStrategy strategy) {
     Preconditions.checkNotNull(exprs);
-    Preconditions.checkNotNull(table);
     Preconditions.checkNotNull(strategy);
 
     List<String> result = new ArrayList<>();
-    int numPartitionCols = table.getNumClusteringCols();
+    // TODO: For non-ScanNode expressions, check if the column value comes from a
+    // partition column
+    int numPartitionCols = (table != null) ? table.getNumClusteringCols() : 0;
 
     for (Expr expr : exprs) {
       String canonicalizedStr = canonicalizeExpr(expr, numPartitionCols, strategy);
@@ -72,6 +73,19 @@ public class ExprCanonicalizer {
     // Sort for deterministic ordering
     Collections.sort(result);
     return result;
+  }
+
+  /**
+   * Canonicalizes a list of expressions according to the specified strategy.
+   * This overload is for non-scan nodes where table information is not available.
+   *
+   * @param exprs List of expressions to canonicalize
+   * @param strategy The canonicalization strategy to apply
+   * @return A new list of canonicalized expression strings, sorted deterministically
+   */
+  public static List<String> canonicalizeExprs(List<Expr> exprs,
+      CanonicalizationStrategy strategy) {
+    return canonicalizeExprs(exprs, null, strategy);
   }
 
   /**

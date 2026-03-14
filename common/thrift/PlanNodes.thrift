@@ -373,7 +373,7 @@ struct THdfsScanNode {
   16: optional bool schedule_scanranges_oldest_to_newest
 
   // Execution stats with some input info that will be stored as historical stats for HBO.
-  17: optional HBO.TScanNodeRun exec_stats
+  17: optional HBO.TPlanNodeRun exec_stats
 }
 
 struct TDataSourceScanNode {
