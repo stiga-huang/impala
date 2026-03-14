@@ -210,6 +210,9 @@ public class SortNode extends PlanNode implements SpillableOperator {
   public void setAnalyticEvalNode(AnalyticEvalNode n) { analyticEvalNode_ = n; }
   public AnalyticEvalNode getAnalyticEvalNode() { return analyticEvalNode_; }
 
+  @Override
+  public boolean isCardinalityPreserving() { return true; }
+
   /**
    * Under special cases, the planner may decide to convert a total sort or
    * partition top-N into a TopN sort with limit. This does the conversion to top-n

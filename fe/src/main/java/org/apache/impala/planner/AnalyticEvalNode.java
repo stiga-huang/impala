@@ -113,6 +113,10 @@ public class AnalyticEvalNode extends PlanNode {
 
   @Override
   public boolean isBlockingNode() { return false; }
+
+  @Override
+  public boolean isCardinalityPreserving() { return true; }
+
   public List<Expr> getPartitionExprs() { return partitionExprs_; }
   public List<OrderByElement> getOrderByElements() { return orderByElements_; }
 

@@ -813,9 +813,6 @@ public class AggregationNode extends PlanNode implements SpillableOperator {
     // CRITICAL: If any child doesn't support HBO, return null
     List<String> childKeys = new ArrayList<>();
     for (PlanNode child : children_) {
-      if (child instanceof ExchangeNode) {
-        child = child.getChild(0);
-      }
       String key = child.generateHboKeyString(strategy);
       if (key == null) {
         LOG.debug("<<<HBO>>> Child node {} of {} doesn't support HBO.",

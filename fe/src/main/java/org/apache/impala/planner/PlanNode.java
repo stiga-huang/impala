@@ -981,6 +981,11 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   public boolean isBlockingNode() { return false; }
 
   /**
+   * Returns true if this plan node preserves the cardinality of its only input child.
+   */
+  public boolean isCardinalityPreserving() { return false; }
+
+  /**
    * Generates an HBO key string for this node, or null if HBO is not supported.
    * This key string represents the logical characteristics that identify similar
    * operations that could benefit from shared historical statistics.
@@ -996,6 +1001,10 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
    *         HBO is not supported for this node type.
    */
   public String generateHboKeyString(CanonicalizationStrategy strategy) {
+    if (isCardinalityPreserving()) {
+      Preconditions.checkState(children_.size() == 1);
+      return getChild(0).generateHboKeyString(strategy);
+    }
     return null;
   }
 
