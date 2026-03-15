@@ -1680,21 +1680,10 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
     exec_summaries[s.node_id] = s;
   }
 
-  vector<string> table_catalog_version_rows;
-  split(table_catalog_version_rows,
-      *(query_handle->frontend_profile()->GetInfoString("Original Table Versions")),
-      is_any_of("\n"));
-  unordered_map<string, int64_t> table_catalog_version;
-  for (auto&& row : table_catalog_version_rows) {
-    vector<string> fields;
-    split(fields, row, is_any_of(","));
-    table_catalog_version[fields[0]] = std::stoll(fields[1]);
-  }
-
   map<int64_t, set<TPlanNodeId>> effective_filter_ids_to_node_ids;
   TPlanNodeId current_node_id = -1;
-  std::function<void(RuntimeProfileBase*)> process_exec_profile = [
-      &process_exec_profile, &effective_filter_ids_to_node_ids, &current_node_id]
+  std::function<void(RuntimeProfileBase*)> find_effective_filters = [
+      &find_effective_filters, &effective_filter_ids_to_node_ids, &current_node_id]
       (RuntimeProfileBase* profile) {
     const string& profile_name = profile->name();
     vector<string> fields;
@@ -1704,8 +1693,6 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
           || profile->GetCounter("RowGroups rejected")->value() > 0
           || profile->GetCounter("Rows rejected")->value() > 0
           || profile->GetCounter("Splits rejected")->value() > 0) {
-        // TODO: also track the node id since the same runtime filter might be applied to
-        // multiple targets, not all of them are effective.
         int64_t filter_id = std::stoi(fields[1]);
         effective_filter_ids_to_node_ids[filter_id].insert(current_node_id);
         VLOG_QUERY << "<<<HBO>>>Filter " << filter_id << " rejected some rows";
@@ -1720,29 +1707,12 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
     vector<RuntimeProfileBase*> children;
     profile->GetChildren(&children);
     for (const auto& child : children) {
-      process_exec_profile(child);
+      find_effective_filters(child);
     }
   };
-  process_exec_profile(query_handle->GetCoordinator()->query_profile());
+  find_effective_filters(query_handle->GetCoordinator()->query_profile());
 
-  // Step 1: Build a map from TPlanNodeId to TPlanNode reference and
-  // a map from parent node_id to first child node_id
-  map<TPlanNodeId, const TPlanNode*> node_map;
-  map<TPlanNodeId, TPlanNodeId> node_to_first_child;
-  for (const TPlanExecInfo& plan_exec_info: exec_req.query_exec_request.plan_exec_info) {
-    for (const TPlanFragment& fragment: plan_exec_info.fragments) {
-      for (size_t i = 0; i < fragment.plan.nodes.size(); ++i) {
-        const TPlanNode& node = fragment.plan.nodes[i];
-        node_map[node.node_id] = &node;
-        // First child is at index i+1 in the flattened array
-        if (node.num_children > 0 && i + 1 < fragment.plan.nodes.size()) {
-          node_to_first_child[node.node_id] = fragment.plan.nodes[i + 1].node_id;
-        }
-      }
-    }
-  }
-
-  // Step 2: Preorder traversal on the plan tree to calculate subtree node IDs and
+  // Preorder traversal on the plan tree to calculate subtree node IDs and
   // collect effective runtime filters for each node
   struct NodeInfo {
     set<TPlanNodeId> subtree_node_ids;
@@ -1750,179 +1720,94 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
   };
   map<TPlanNodeId, NodeInfo> node_info_map;
 
-  // Helper function to get the size of a subtree rooted at idx
-  std::function<int(const vector<TPlanNode>&, int)> get_subtree_size =
-      [&](const vector<TPlanNode>& nodes, int idx) -> int {
-    if (idx >= nodes.size()) return 0;
-    int size = 1;
-    int child_idx = idx + 1;
-    for (int i = 0; i < nodes[idx].num_children; ++i) {
-      int subtree_sz = get_subtree_size(nodes, child_idx);
-      size += subtree_sz;
-      child_idx += subtree_sz;
+  // Build a map from node_id to TPlanNode for quick lookup
+  unordered_map<TPlanNodeId, const TPlanNode*> node_map;
+  for (const TPlanExecInfo& plan_exec_info: exec_req.query_exec_request.plan_exec_info) {
+    for (const TPlanFragment& fragment: plan_exec_info.fragments) {
+      for (const TPlanNode& node : fragment.plan.nodes) {
+        node_map[node.node_id] = &node;
+      }
     }
-    return size;
-  };
+  }
 
-  // Helper function to perform preorder traversal and build node_info_map
-  std::function<void(const vector<TPlanNode>&, int)> build_node_info =
-      [&](const vector<TPlanNode>& nodes, int idx) {
-    if (idx >= nodes.size()) return;
+  // Use pre-built all_plan_nodes from frontend with cross-fragment child counts
+  DCHECK(exec_req.__isset.all_plan_nodes) << "Frontend must populate all_plan_nodes";
+  vector<const TPlanNode*> all_plan_nodes;
+  vector<int> all_plan_node_child_counts;  // Cross-fragment child counts
+  int non_exchange_nodes_count = 0;
+  for (const TPlanNodeRef& node_ref : exec_req.all_plan_nodes) {
+    auto it = node_map.find(node_ref.node_id);
+    DCHECK(it != node_map.end()) << "Node " << node_ref.node_id << " not found in fragments";
+    const TPlanNode* node = it->second;
+    all_plan_nodes.push_back(node);
+    all_plan_node_child_counts.push_back(node_ref.num_children);
+    VLOG_QUERY << "<<<HBO>>>Node " << node->node_id << " " << node->label_detail
+               << " (children: " << node_ref.num_children << ")";
+    if (node->node_type != TPlanNodeType::EXCHANGE_NODE) {
+      non_exchange_nodes_count++;
+    }
+  }
+  VLOG_QUERY << "<<<HBO>>>non_exchange_nodes_count: " << non_exchange_nodes_count;
 
-    const TPlanNode& node = nodes[idx];
+  // Build node_info_map using the pre-ordered all_plan_nodes list
+  // The list is in depth-first order, so we can process it directly
+  std::function<int(int)> build_node_info_from_all_nodes = [&](int idx) -> int {
+    if (idx >= all_plan_nodes.size()) return 0;
+
+    const TPlanNode* node = all_plan_nodes[idx];
+    int num_children = all_plan_node_child_counts[idx];
+
     set<TPlanNodeId> subtree_ids;
     vector<const TRuntimeFilterDesc*> subtree_filters;
 
-    // Traverse the subtree rooted at this node
-    std::function<void(int)> collect_subtree_info = [&](int n_idx) {
-      if (n_idx >= nodes.size()) return;
+    // Add this node to its own subtree
+    subtree_ids.insert(node->node_id);
 
-      const TPlanNode& n = nodes[n_idx];
-      subtree_ids.insert(n.node_id);
-
-      // Collect effective runtime filters on this node
-      if (n.__isset.runtime_filters) {
-        for (const TRuntimeFilterDesc& f : n.runtime_filters) {
-          if (effective_filter_ids_to_node_ids.find(f.filter_id) != effective_filter_ids_to_node_ids.end()) {
-            const auto& applied_nodes = effective_filter_ids_to_node_ids[f.filter_id];
-            if (applied_nodes.find(node.node_id) != applied_nodes.end()) {
-              subtree_filters.push_back(&f);
-              VLOG_QUERY << "<<<HBO>>> Filter " << f.filter_id << " from node "
-               << f.src_node_id << " rejected some rows on node " << node.node_id;
-            }
+    // Collect effective runtime filters on this node
+    if (node->__isset.runtime_filters) {
+      for (const TRuntimeFilterDesc& f : node->runtime_filters) {
+        if (effective_filter_ids_to_node_ids.find(f.filter_id) !=
+            effective_filter_ids_to_node_ids.end()) {
+          const auto& applied_nodes = effective_filter_ids_to_node_ids[f.filter_id];
+          if (applied_nodes.find(node->node_id) != applied_nodes.end()) {
+            subtree_filters.push_back(&f);
           }
         }
       }
-
-      // Process children
-      int child_idx = n_idx + 1;
-      for (int i = 0; i < n.num_children; ++i) {
-        if (child_idx >= nodes.size()) break;
-        collect_subtree_info(child_idx);
-        child_idx += get_subtree_size(nodes, child_idx);
-      }
-    };
-
-    collect_subtree_info(idx);
-    node_info_map[node.node_id] = {subtree_ids, subtree_filters};
-
-    // Recursively process children to build their node_info as well
-    int child_idx = idx + 1;
-    for (int i = 0; i < node.num_children; ++i) {
-      if (child_idx >= nodes.size()) break;
-      build_node_info(nodes, child_idx);
-      child_idx += get_subtree_size(nodes, child_idx);
     }
+
+    // Process all children (including cross-fragment children)
+    int nodes_processed = 1;  // Count this node
+    int child_idx = idx + 1;
+    for (int i = 0; i < num_children; ++i) {
+      int child_subtree_size = build_node_info_from_all_nodes(child_idx);
+
+      // Merge child's subtree info into this node's subtree
+      if (node_info_map.count(all_plan_nodes[child_idx]->node_id)) {
+        NodeInfo& child_info = node_info_map[all_plan_nodes[child_idx]->node_id];
+        subtree_ids.insert(child_info.subtree_node_ids.begin(),
+                          child_info.subtree_node_ids.end());
+        subtree_filters.insert(subtree_filters.end(),
+                              child_info.subtree_effective_filters.begin(),
+                              child_info.subtree_effective_filters.end());
+      }
+
+      child_idx += child_subtree_size;
+      nodes_processed += child_subtree_size;
+    }
+
+    // Store the node info
+    node_info_map[node->node_id] = {subtree_ids, subtree_filters};
+
+    return nodes_processed;
   };
 
-  // Build the complete query plan by merging fragments in order.
-  // According to TPlanExecInfo: "fragments[i] may consume the output of fragments[j > i]"
-  // This means fragments are ordered such that dependencies come first.
-  // We can simply concatenate all fragment nodes in reverse order (children before parents).
-  vector<const TPlanNode*> all_plan_nodes;
-  VLOG_QUERY << "<<<HBO>>>Building all_plan_nodes";
-  for (const TPlanExecInfo& plan_exec_info: exec_req.query_exec_request.plan_exec_info) {
-    // Process fragments in reverse order so children are processed before parents
-    for (auto it = plan_exec_info.fragments.rbegin(); 
-         it != plan_exec_info.fragments.rend(); ++it) {
-      const TPlanFragment& fragment = *it;
-      for (const TPlanNode& node : fragment.plan.nodes) {
-        all_plan_nodes.push_back(&node);
-        VLOG_QUERY << "<<<HBO>>>Node " << node.node_id << " " << node.label_detail;
-      }
-    }
-  }
-  VLOG_QUERY << "<<<HBO>>>Built all_plan_nodes";
-
-  // Process all plan fragments to build node_info_map
-  for (const TPlanExecInfo& plan_exec_info: exec_req.query_exec_request.plan_exec_info) {
-    for (const TPlanFragment& fragment: plan_exec_info.fragments) {
-      if (fragment.plan.nodes.empty()) continue;
-      build_node_info(fragment.plan.nodes, 0);
-    }
+  // Start the traversal from the root (index 0)
+  if (!all_plan_nodes.empty()) {
+    build_node_info_from_all_nodes(0);
   }
 
-  // Build a map from exchange node ID to the fragment that feeds it
-  map<TPlanNodeId, const TPlanFragment*> exchange_to_fragment;
-  for (const TPlanExecInfo& plan_exec_info: exec_req.query_exec_request.plan_exec_info) {
-    for (const TPlanFragment& fragment: plan_exec_info.fragments) {
-      if (fragment.__isset.output_sink &&
-          fragment.output_sink.type == TDataSinkType::DATA_STREAM_SINK &&
-          fragment.output_sink.__isset.stream_sink) {
-        TPlanNodeId dest_id = fragment.output_sink.stream_sink.dest_node_id;
-        exchange_to_fragment[dest_id] = &fragment;
-      }
-    }
-  }
-
-  // Augment exchange nodes with their child fragments' subtrees
-  for (const TPlanNode* node_ptr : all_plan_nodes) {
-    if (node_ptr->node_type == TPlanNodeType::EXCHANGE_NODE) {
-      auto it = exchange_to_fragment.find(node_ptr->node_id);
-      if (it != exchange_to_fragment.end()) {
-        const TPlanFragment* child_fragment = it->second;
-        if (!child_fragment->plan.nodes.empty()) {
-          const TPlanNode& child_root = child_fragment->plan.nodes[0];
-          if (node_info_map.count(child_root.node_id) && 
-              node_info_map.count(node_ptr->node_id)) {
-            NodeInfo& child_info = node_info_map[child_root.node_id];
-            NodeInfo& exchange_info = node_info_map[node_ptr->node_id];
-
-            // Merge child's subtree into exchange node's subtree
-            exchange_info.subtree_node_ids.insert(
-                child_info.subtree_node_ids.begin(),
-                child_info.subtree_node_ids.end());
-            exchange_info.subtree_effective_filters.insert(
-                exchange_info.subtree_effective_filters.end(),
-                child_info.subtree_effective_filters.begin(),
-                child_info.subtree_effective_filters.end());
-          }
-        }
-      }
-    }
-  }
-
-  // Propagate the augmented subtree information upward through each fragment
-  for (const TPlanExecInfo& plan_exec_info: exec_req.query_exec_request.plan_exec_info) {
-    for (const TPlanFragment& fragment: plan_exec_info.fragments) {
-      if (fragment.plan.nodes.empty()) continue;
-
-      // Traverse the fragment tree bottom-up to propagate subtrees upward
-      std::function<void(int)> propagate_subtrees_upward = [&](int idx) {
-        if (idx >= fragment.plan.nodes.size()) return;
-
-        const TPlanNode& node = fragment.plan.nodes[idx];
-
-        // First process children
-        int child_idx = idx + 1;
-        for (int i = 0; i < node.num_children; ++i) {
-          if (child_idx >= fragment.plan.nodes.size()) break;
-          propagate_subtrees_upward(child_idx);
-
-          // Merge child's subtree into parent's subtree
-          const TPlanNode& child_node = fragment.plan.nodes[child_idx];
-          if (node_info_map.count(node.node_id) && node_info_map.count(child_node.node_id)) {
-            NodeInfo& parent_info = node_info_map[node.node_id];
-            NodeInfo& child_info = node_info_map[child_node.node_id];
-
-            parent_info.subtree_node_ids.insert(
-                child_info.subtree_node_ids.begin(),
-                child_info.subtree_node_ids.end());
-            parent_info.subtree_effective_filters.insert(
-                parent_info.subtree_effective_filters.end(),
-                child_info.subtree_effective_filters.begin(),
-                child_info.subtree_effective_filters.end());
-          }
-
-          child_idx += get_subtree_size(fragment.plan.nodes, child_idx);
-        }
-      };
-
-      propagate_subtrees_upward(0);
-    }
-  }
-
-  // Step 3: For each non-exchange PlanNode, check if any effective runtime filter
+  // For each non-exchange PlanNode, check if any effective runtime filter
   // in its subtree has src_node_id outside the subtree
   int nodes_with_external_filters = 0;
   for (const auto& node_entry : node_map) {
@@ -1951,31 +1836,27 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
       nodes_with_external_filters++;
     }
   }
-
   VLOG_QUERY << "<<<HBO>>>Number of non-exchange nodes with external effective filters: "
              << nodes_with_external_filters;
 
   THistoricalStatsUpdate history_stats;
   for (const TPlanNode& p : GetPlanNodesWithHboKeys(exec_req)) {
-    // Skip nodes if runtime filters have filtered some rows. Those rows are ignored
-    // since they can't pass later join nodes. Currently don't have context to track
-    // this. On the other hand, the output cardinality depends on when the runtime
-    // filters arrive, which is unreliable.
-    if (p.__isset.runtime_filters) {
-      bool has_effective_filters = false;
-      for (const TRuntimeFilterDesc& f : p.runtime_filters) {
-        if (effective_filter_ids_to_node_ids.find(f.filter_id) != effective_filter_ids_to_node_ids.end()) {
-          const auto& applied_nodes = effective_filter_ids_to_node_ids[f.filter_id];
-          if (applied_nodes.find(p.node_id) != applied_nodes.end()) {
-            VLOG_QUERY << "Filter " << f.filter_id << " rejected some rows on ScanNode "
-                       << p.node_id << " " << p.label_detail;
-            has_effective_filters = true;
-            break;
-          }
-        }
+    // Skip nodes if runtime filters have filtered some rows. The output cardinality
+    // depends on when the runtime filters arrive, which is unreliable.
+    const NodeInfo& info = node_info_map[p.node_id];
+    bool has_external_filter = false;
+    for (const TRuntimeFilterDesc* filter : info.subtree_effective_filters) {
+      // Check if src_node_id is outside the subtree
+      if (filter->__isset.src_node_id &&
+          info.subtree_node_ids.find(filter->src_node_id) == info.subtree_node_ids.end()) {
+        VLOG_QUERY << "<<<HBO>>>Node " << p.node_id << " has effective filter "
+                   << filter->filter_id << " in its subtree with src_node_id "
+                   << filter->src_node_id << " outside the subtree";
+        has_external_filter = true;
+        break;
       }
-      if (has_effective_filters) continue;
     }
+    if (has_external_filter) continue;
 
     // TODO: store the cumulative TExecStats instead of just cardinality
     int64_t cardinality = 0;
@@ -1984,53 +1865,23 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
     }
 
     TPlanNodeRun stats;
-    // Use the pre-populated exec_stats if available
+    // Use the pre-populated exec_stats
     if (!p.__isset.exec_stats) {
       VLOG_QUERY << "<<<HBO>>>No exec_stats from FE for node " << p.node_id << " " << p.label_detail;
       continue;
     }
     stats = p.exec_stats;
     stats.num_rows = cardinality;
-    // For HDFS scan nodes, update catalog_version from table_catalog_version map
-    if (p.node_type == TPlanNodeType::HDFS_SCAN_NODE) {
-      // TODO: pass this from FE
-      // TODO: Can we get the table name from tuple_id of THdfsScanNode?
-      //  TDescriptorTable.tableDescriptors has tableName.
-      // remove alias in label_detail
-      string table_name = p.label_detail.substr(0, p.label_detail.find(' '));
-      // table_name might be in the format "db.table.column1.column2", extract "db.table"
-      string table_key = table_name;
-      if (table_catalog_version.find(table_name) == table_catalog_version.end()) {
-        size_t first_dot = table_name.find('.');
-        if (first_dot != string::npos) {
-          size_t second_dot = table_name.find('.', first_dot + 1);
-          if (second_dot != string::npos) {
-            table_key = table_name.substr(0, second_dot);
-          }
-        }
-      }
-      if (table_catalog_version.find(table_key) != table_catalog_version.end()) {
-        stats.catalog_version = table_catalog_version.at(table_key);
-      }
-      VLOG_QUERY << "<<<HBO>>>ScanNode " << table_name << "|" << stats.catalog_version << "|"
-                  << stats.num_rows;
-    } else if (p.node_type == TPlanNodeType::HASH_JOIN_NODE ||
-                p.node_type == TPlanNodeType::NESTED_LOOP_JOIN_NODE ||
-                p.node_type == TPlanNodeType::ICEBERG_DELETE_NODE) {
-      VLOG_QUERY << "<<<HBO>>>JoinNode " << p.node_id << " (" << p.label << ")|"
-                  << stats.num_rows;
-    }
+    VLOG_QUERY << "<<<HBO>>> " << p.node_id << " (" << p.label << ")|" << stats.num_rows;
 
     // Store stats under all hash keys (all canonicalization strategies)
-    if (p.__isset.hbo_hash_keys && !p.hbo_hash_keys.empty()) {
-      TPlanNodeRunWithKeys run_with_keys;
-      run_with_keys.run = stats;
-      run_with_keys.hash_keys = p.hbo_hash_keys;
-      history_stats.plan_node_runs.push_back(run_with_keys);
-      history_stats.__isset.plan_node_runs = true;
-    }
+    DCHECK(p.__isset.hbo_hash_keys && !p.hbo_hash_keys.empty());
+    TPlanNodeRunWithKeys run_with_keys;
+    run_with_keys.run = stats;
+    run_with_keys.hash_keys = p.hbo_hash_keys;
+    history_stats.plan_node_runs.push_back(run_with_keys);
+    history_stats.__isset.plan_node_runs = true;
   }
-  VLOG_QUERY << "Invoke JNI StoreExecStats";
   return exec_env_->frontend()->StoreExecStats(history_stats);
 }
 

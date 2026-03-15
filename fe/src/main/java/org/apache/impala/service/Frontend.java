@@ -171,6 +171,7 @@ import org.apache.impala.hooks.QueryEventHook;
 import org.apache.impala.hooks.QueryEventHookManager;
 import org.apache.impala.planner.HdfsScanNode;
 import org.apache.impala.planner.PlanFragment;
+import org.apache.impala.planner.PlanNode;
 import org.apache.impala.planner.Planner;
 import org.apache.impala.planner.ScanNode;
 import org.apache.impala.service.catalogmanager.FeCatalogManager;
@@ -222,6 +223,7 @@ import org.apache.impala.thrift.TLoadDataResp;
 import org.apache.impala.thrift.TMetadataOpRequest;
 import org.apache.impala.thrift.TPlanExecInfo;
 import org.apache.impala.thrift.TPlanFragment;
+import org.apache.impala.thrift.TPlanNodeRef;
 import org.apache.impala.thrift.TPlannerType;
 import org.apache.impala.thrift.TPoolConfig;
 import org.apache.impala.thrift.TQueryCtx;
@@ -384,6 +386,9 @@ public class Frontend {
       // Available cores per executor node.
       // Valid value must be >= 0. Set by Frontend.getTExecRequest().
       protected int availableCoresPerNode_ = -1;
+
+      // The root PlanNode for building all_plan_nodes list
+      protected PlanNode planRoot_ = null;
 
       public boolean disableAuthorization() { return disableAuthorization_; }
 
@@ -2000,6 +2005,43 @@ public class Frontend {
   }
 
   /**
+   * Performs a depth-first traversal of the entire distributed plan tree starting
+   * from the given PlanNode, collecting plan node references (id + child count).
+   * Unlike PlanNode.treeToThrift(), this traverses across fragment boundaries by
+   * following ExchangeNode children and includes cross-fragment children in the count.
+   * Since the plan tree is a DAG (directed acyclic graph), no visited set is needed.
+   */
+  private static void collectAllPlanNodeRefsDepthFirst(
+      PlanNode node, List<TPlanNodeRef> result) {
+    if (node == null) return;
+
+    // Create reference with node_id and total child count (including cross-fragment)
+    TPlanNodeRef nodeRef = new TPlanNodeRef();
+    nodeRef.setNode_id(node.getId().asInt());
+    nodeRef.setNum_children(node.getChildren().size());
+    result.add(nodeRef);
+
+    // Recursively visit all children, INCLUDING cross-fragment children
+    for (PlanNode child : node.getChildren()) {
+      collectAllPlanNodeRefsDepthFirst(child, result);
+    }
+  }
+
+  /**
+   * Builds the all_plan_nodes list by performing a depth-first traversal from the
+   * root of the query plan tree.
+   */
+  private void buildAllPlanNodes(TExecRequest execRequest, PlanNode planRoot) {
+    if (!execRequest.isSetQuery_exec_request() || planRoot == null) {
+      return;
+    }
+
+    List<TPlanNodeRef> allPlanNodes = new ArrayList<>();
+    collectAllPlanNodeRefsDepthFirst(planRoot, allPlanNodes);
+    execRequest.setAll_plan_nodes(allPlanNodes);
+  }
+
+  /**
    * Return a TPlanExecInfo corresponding to the plan with root fragment 'planRoot'.
    */
   public static TPlanExecInfo createPlanExecInfo(PlanFragment planRoot,
@@ -2066,6 +2108,12 @@ public class Frontend {
       planCtx.plan_ = planRoots;
     }
 
+    // Save the root PlanNode for later use in building all_plan_nodes
+    // For a query, there's typically one plan root (the coordinator fragment)
+    if (!planRoots.isEmpty() && planRoots.get(0).getPlanRoot() != null) {
+      planCtx.compilationState_.planRoot_ = planRoots.get(0).getPlanRoot();
+    }
+
     // Compute resource requirements of the final plans.
     Planner.computeResourceReqs(planRoots, queryCtx, result,
         planner.getPlannerCtx(), planner.getAnalysisResult().isQueryStmt());
@@ -2124,6 +2172,10 @@ public class Frontend {
       // can handle various planner fallback execution logic (e.g. allowing one
       // planner, if execution fails, to call a different planner)
       TExecRequest result = getTExecRequestWithFallback(planCtx, timeline);
+
+      // Build all_plan_nodes array by depth-first traversal from plan root
+      buildAllPlanNodes(result, planCtx.compilationState_.planRoot_);
+
       DebugUtils.executeDebugAction(
           planCtx.getQueryContext().client_request.query_options.getDebug_action(),
           DebugUtils.PLAN_CREATE);

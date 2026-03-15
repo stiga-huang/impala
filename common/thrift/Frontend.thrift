@@ -680,6 +680,15 @@ struct TKillQueryReq {
   3: required bool is_admin;
 }
 
+// Reference to a plan node in the depth-first traversal order.
+// The full TPlanNode can be looked up from the fragments using node_id.
+struct TPlanNodeRef {
+  1: required Types.TPlanNodeId node_id
+  // Number of children including cross-fragment children (e.g., ExchangeNode children).
+  // This differs from TPlanNode.num_children which only counts same-fragment children.
+  2: required i32 num_children
+}
+
 // Result of call to createExecRequest()
 struct TExecRequest {
   1: required Types.TStmtType stmt_type = TStmtType.UNKNOWN
@@ -768,6 +777,11 @@ struct TExecRequest {
   // Result of statements which end up being NO_OP. Set iff stmt_type is NO_OP. E.g.,
   // "ALTER TABLE ... CONVERT TO ICEBERG" when the table is already an Iceberg table.
   27: optional list<string> noop_result
+
+  // Flattened depth-first traversal order of all plan nodes across all fragments.
+  // Each entry contains the node_id and total child count (including cross-fragment).
+  // The full TPlanNode data can be looked up from the fragments.
+  28: optional list<TPlanNodeRef> all_plan_nodes
 }
 
 // Parameters to FeSupport.cacheJar().
