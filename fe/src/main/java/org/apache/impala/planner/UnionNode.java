@@ -32,6 +32,7 @@ import org.apache.impala.thrift.TExecNodePhase;
 import org.apache.impala.thrift.TExplainLevel;
 import org.apache.impala.thrift.TExpr;
 import org.apache.impala.thrift.TPlanNode;
+import org.apache.impala.thrift.TPlanNodeRun;
 import org.apache.impala.thrift.TPlanNodeType;
 import org.apache.impala.thrift.TQueryOptions;
 import org.apache.impala.thrift.TUnionNode;
@@ -120,33 +121,47 @@ public class UnionNode extends PlanNode {
   public void computeStats(Analyzer analyzer) {
     super.computeStats(analyzer);
     analyzer.registerTupleProducingNode(tupleId_, this);
-    long totalChildCardinality = 0;
-    boolean haveChildWithCardinality = false;
-    hasHardEstimates_ = true;
-    for (PlanNode child: children_) {
-      // ignore missing child cardinality info in the hope it won't matter enough
-      // to change the planning outcome
-      if (child.cardinality_ >= 0) {
-        totalChildCardinality =
-            MathUtil.addCardinalities(totalChildCardinality, child.cardinality_);
-        haveChildWithCardinality = true;
+
+    // Try HBO cardinality update first
+    if (!tryUpdateCardinalityFromHbo(analyzer)) {
+      // Fall back to summing child cardinalities
+      long totalChildCardinality = 0;
+      boolean haveChildWithCardinality = false;
+      hasHardEstimates_ = true;
+      for (PlanNode child: children_) {
+        // ignore missing child cardinality info in the hope it won't matter enough
+        // to change the planning outcome
+        if (child.cardinality_ >= 0) {
+          totalChildCardinality =
+              MathUtil.addCardinalities(totalChildCardinality, child.cardinality_);
+          haveChildWithCardinality = true;
+        }
+        // Union fragments are scheduled on the union of hosts of all scans in the fragment
+        // and the hosts of all its input fragments. Approximate this with max(), which is
+        // correct iff the child fragments run on sets of nodes that are supersets or
+        // subsets of each other, i.e. not just partly overlapping.
+        numNodes_ = Math.max(child.getNumNodes(), numNodes_);
+        numInstances_ = Math.max(child.getNumInstances(), numInstances_);
+        hasHardEstimates_ &= child.hasHardEstimates_;
       }
-      // Union fragments are scheduled on the union of hosts of all scans in the fragment
-      // and the hosts of all its input fragments. Approximate this with max(), which is
-      // correct iff the child fragments run on sets of nodes that are supersets or
-      // subsets of each other, i.e. not just partly overlapping.
-      numNodes_ = Math.max(child.getNumNodes(), numNodes_);
-      numInstances_ = Math.max(child.getNumInstances(), numInstances_);
-      hasHardEstimates_ &= child.hasHardEstimates_;
-    }
-    // Consider estimate valid if we have at least one child with known cardinality, or
-    // only constant values.
-    if (haveChildWithCardinality || children_.size() == 0) {
-      cardinality_ =
-          MathUtil.addCardinalities(totalChildCardinality, constExprLists_.size());
+      // Consider estimate valid if we have at least one child with known cardinality, or
+      // only constant values.
+      if (haveChildWithCardinality || children_.size() == 0) {
+        cardinality_ =
+            MathUtil.addCardinalities(totalChildCardinality, constExprLists_.size());
+      } else {
+        cardinality_ = -1;
+      }
     } else {
-      cardinality_ = -1;
+      // HBO provided cardinality, still need to compute numNodes_ and numInstances_
+      hasHardEstimates_ = true;
+      for (PlanNode child: children_) {
+        numNodes_ = Math.max(child.getNumNodes(), numNodes_);
+        numInstances_ = Math.max(child.getNumInstances(), numInstances_);
+        hasHardEstimates_ &= child.hasHardEstimates_;
+      }
     }
+
     // The number of nodes of a union node is -1 (invalid) if all the referenced tables
     // are inline views (e.g. select 1 FROM (VALUES(1 x, 1 y)) a FULL OUTER JOIN
     // (VALUES(1 x, 1 y)) b ON (a.x = b.y)). We need to set the correct value.
@@ -356,6 +371,35 @@ public class UnionNode extends PlanNode {
   }
 
   @Override
+  public String generateHboKeyString(CanonicalizationStrategy strategy) {
+    // Check if all children support HBO
+    List<String> childKeys = new ArrayList<>();
+    for (PlanNode child : children_) {
+      String childKey = child.generateHboKeyString(strategy);
+      if (childKey == null) {
+        LOG.debug("<<<HBO>>> Child node {} of UnionNode doesn't support HBO.",
+            child.getDisplayLabel());
+        return null;
+      }
+      childKeys.add(childKey);
+    }
+
+    // Build UnionNode-specific HBO key
+    StringBuilder sb = new StringBuilder("UnionNode:");
+
+    // TODO: consider passthrough children in the key for tracking memory usage.
+    // Include number of constant expression lists (affects cardinality)
+    sb.append("constExprs:").append(constExprLists_.size()).append("|");
+
+    // Include all children keys in order
+    for (int i = 0; i < childKeys.size(); i++) {
+      sb.append("CHILD[").append(i).append("]:").append(childKeys.get(i)).append("|");
+    }
+
+    return sb.toString();
+  }
+
+  @Override
   protected void toThrift(TPlanNode msg, ThriftSerializationCtx serialCtx) {
     Preconditions.checkState(materializedResultExprLists_.size() == children_.size());
     List<List<TExpr>> texprLists = new ArrayList<>();
@@ -370,6 +414,19 @@ public class UnionNode extends PlanNode {
     msg.union_node = new TUnionNode(
         tupleId_.asInt(), texprLists, constTexprLists, firstMaterializedChildIdx_);
     msg.node_type = TPlanNodeType.UNION_NODE;
+
+    // Add HBO hash keys (skip for tuple cache contexts)
+    if (!serialCtx.isTupleCache()) {
+      List<String> hboHashKeys = generateHboHashStrings();
+      if (!hboHashKeys.isEmpty()) {
+        msg.setHbo_hash_keys(hboHashKeys);
+        List<Long> scanInputRows = collectScanInputRows();
+        if (msg.exec_stats == null) {
+          msg.exec_stats = new TPlanNodeRun();
+        }
+        msg.exec_stats.setScan_input_rows(scanInputRows);
+      }
+    }
   }
 
   @Override

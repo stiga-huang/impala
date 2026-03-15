@@ -21,8 +21,10 @@ import java.util.List;
 
 import org.apache.impala.analysis.Analyzer;
 import org.apache.impala.analysis.Expr;
+import org.apache.impala.common.ThriftSerializationCtx;
 import org.apache.impala.thrift.TExplainLevel;
 import org.apache.impala.thrift.TPlanNode;
+import org.apache.impala.thrift.TPlanNodeRun;
 import org.apache.impala.thrift.TPlanNodeType;
 import org.apache.impala.thrift.TQueryOptions;
 import org.slf4j.Logger;
@@ -55,8 +57,59 @@ public class SelectNode extends PlanNode {
   }
 
   @Override
+  public boolean isCardinalityPreserving() {
+    // Only cardinality-preserving when no conjuncts (pure passthrough)
+    return conjuncts_.isEmpty();
+  }
+
+  @Override
   protected void toThrift(TPlanNode msg) {
     msg.node_type = TPlanNodeType.SELECT_NODE;
+  }
+
+  @Override
+  protected void toThrift(TPlanNode msg, ThriftSerializationCtx serialCtx) {
+    msg.node_type = TPlanNodeType.SELECT_NODE;
+
+    // Add HBO hash keys (skip for tuple cache contexts)
+    if (!serialCtx.isTupleCache()) {
+      List<String> hboHashKeys = generateHboHashStrings();
+      if (!hboHashKeys.isEmpty()) {
+        msg.setHbo_hash_keys(hboHashKeys);
+        List<Long> scanInputRows = collectScanInputRows();
+        if (msg.exec_stats == null) {
+          msg.exec_stats = new TPlanNodeRun();
+        }
+        msg.exec_stats.setScan_input_rows(scanInputRows);
+      }
+    }
+  }
+
+  @Override
+  public String generateHboKeyString(CanonicalizationStrategy strategy) {
+    // If no conjuncts, delegate to child (handled by PlanNode base class)
+    if (conjuncts_.isEmpty()) {
+      return getChild(0).generateHboKeyString(strategy);
+    }
+
+    // Check if child supports HBO
+    String childKey = getChild(0).generateHboKeyString(strategy);
+    if (childKey == null) {
+      return null;
+    }
+
+    // Build SelectNode-specific HBO key
+    StringBuilder sb = new StringBuilder("SelectNode:");
+
+    // Canonicalize conjuncts (no table info needed for SelectNode)
+    List<String> conjunctStrs = ExprCanonicalizer.canonicalizeExprs(
+        conjuncts_, strategy);
+    sb.append("FILTER:").append(String.join(",", conjunctStrs)).append("|");
+
+    // Include child key
+    sb.append("CHILD:").append(childKey);
+
+    return sb.toString();
   }
 
   @Override
@@ -105,12 +158,18 @@ public class SelectNode extends PlanNode {
   @Override
   public void computeStats(Analyzer analyzer) {
     super.computeStats(analyzer);
-    if (getChild(0).cardinality_ == -1) {
-      cardinality_ = -1;
-    } else {
-      cardinality_ = applyConjunctsSelectivity(getChild(0).cardinality_);
-      Preconditions.checkState(cardinality_ >= 0);
+
+    // Try HBO cardinality update first
+    if (!tryUpdateCardinalityFromHbo(analyzer)) {
+      // Fall back to selectivity-based estimation
+      if (getChild(0).cardinality_ == -1) {
+        cardinality_ = -1;
+      } else {
+        cardinality_ = applyConjunctsSelectivity(getChild(0).cardinality_);
+        Preconditions.checkState(cardinality_ >= 0);
+      }
     }
+
     cardinality_ = capCardinalityAtLimit(cardinality_);
     if (LOG.isTraceEnabled()) {
       LOG.trace("stats Select: cardinality=" + Long.toString(cardinality_));
