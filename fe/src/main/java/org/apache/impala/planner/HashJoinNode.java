@@ -34,6 +34,7 @@ import org.apache.impala.common.ThriftSerializationCtx;
 import org.apache.impala.thrift.TExplainLevel;
 import org.apache.impala.thrift.THashJoinNode;
 import org.apache.impala.thrift.TPlanNode;
+import org.apache.impala.thrift.TPlanNodeRun;
 import org.apache.impala.thrift.TPlanNodeType;
 import org.apache.impala.thrift.TQueryOptions;
 import org.apache.impala.util.BitUtil;
@@ -160,6 +161,17 @@ public class HashJoinNode extends JoinNode implements SpillableOperator {
     // used by partitioned builds, which are currently excluded from tuple caching.
     if (!serialCtx.isTupleCache()) {
       msg.join_node.hash_join_node.setHash_seed(getFragment().getHashSeed());
+
+      // Set HBO hash keys and scan input rows
+      List<String> hboHashKeys = generateHboHashStrings();
+      if (!hboHashKeys.isEmpty()) {
+        msg.setHbo_hash_keys(hboHashKeys);
+        List<Long> scanInputRows = collectScanInputRows();
+        if (msg.exec_stats == null) {
+          msg.exec_stats = new TPlanNodeRun();
+        }
+        msg.exec_stats.setScan_input_rows(scanInputRows);
+      }
     }
   }
 

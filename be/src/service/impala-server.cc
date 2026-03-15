@@ -1984,10 +1984,16 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
     }
 
     TPlanNodeRun stats;
-    // For HDFS scan nodes, we can use the pre-populated exec_stats if available
-    if (p.node_type == TPlanNodeType::HDFS_SCAN_NODE &&
-        p.__isset.hdfs_scan_node && p.hdfs_scan_node.__isset.exec_stats) {
-      stats = p.hdfs_scan_node.exec_stats;
+    // Use the pre-populated exec_stats if available
+    if (!p.__isset.exec_stats) {
+      VLOG_QUERY << "<<<HBO>>>No exec_stats from FE for node " << p.node_id << " " << p.label_detail;
+      continue;
+    }
+    stats = p.exec_stats;
+    stats.num_rows = cardinality;
+    // For HDFS scan nodes, update catalog_version from table_catalog_version map
+    if (p.node_type == TPlanNodeType::HDFS_SCAN_NODE) {
+      // TODO: pass this from FE
       // TODO: Can we get the table name from tuple_id of THdfsScanNode?
       //  TDescriptorTable.tableDescriptors has tableName.
       // remove alias in label_detail
@@ -2007,27 +2013,13 @@ Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
         stats.catalog_version = table_catalog_version.at(table_key);
       }
       VLOG_QUERY << "<<<HBO>>>ScanNode " << table_name << "|" << stats.catalog_version << "|"
-                 << stats.num_rows;
-    } else {
-      // For non-scan nodes or scan nodes without exec_stats, create a minimal TPlanNodeRun
-      stats.num_rows = cardinality;
-      // Set num_input_rows as the cardinality of the first child
-      stats.num_input_rows = 0;
-      stats.__isset.num_input_rows = true;
-      if (node_to_first_child.find(p.node_id) != node_to_first_child.end()) {
-        TPlanNodeId first_child_id = node_to_first_child[p.node_id];
-        if (exec_summaries.find(first_child_id) != exec_summaries.end()) {
-          int64_t first_child_cardinality = 0;
-          for (const TExecStats& stat: exec_summaries[first_child_id].exec_stats) {
-            first_child_cardinality += stat.cardinality;
-          }
-          stats.num_input_rows = first_child_cardinality;
-        }
-      }
-      VLOG_QUERY << "<<<HBO>>>Node " << p.node_id << " (" << p.label << ")|"
-                 << stats.num_rows << "|input=" << stats.num_input_rows;
+                  << stats.num_rows;
+    } else if (p.node_type == TPlanNodeType::HASH_JOIN_NODE ||
+                p.node_type == TPlanNodeType::NESTED_LOOP_JOIN_NODE ||
+                p.node_type == TPlanNodeType::ICEBERG_DELETE_NODE) {
+      VLOG_QUERY << "<<<HBO>>>JoinNode " << p.node_id << " (" << p.label << ")|"
+                  << stats.num_rows;
     }
-    stats.num_rows = cardinality;
 
     // Store stats under all hash keys (all canonicalization strategies)
     if (p.__isset.hbo_hash_keys && !p.hbo_hash_keys.empty()) {

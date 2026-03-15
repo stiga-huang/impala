@@ -896,10 +896,64 @@ public abstract class JoinNode extends PlanNode {
       }
     }
     cardinality_ = capCardinalityAtLimit(cardinality_);
+
+    tryUpdateCardinalityFromHbo(analyzer);
+
     Preconditions.checkState(hasValidStats());
     if (LOG.isTraceEnabled()) {
       LOG.trace("stats Join: cardinality=" + Long.toString(cardinality_));
     }
+  }
+
+  @Override
+  public String generateHboKeyString(CanonicalizationStrategy strategy) {
+    // Check children support HBO
+    String childKeys[] = new String[2];
+    for (int i = 0; i < 2; i++) {
+      childKeys[i] = getChild(i).generateHboKeyString(strategy);
+      if (childKeys[i] == null) {
+        LOG.debug("<<<HBO>>> Child {} doesn't support HBO for {}",
+           getDisplayLabel(), getChild(i).getDisplayLabel());
+        return null;
+      }
+    }
+
+    StringBuilder sb = new StringBuilder("JoinNode:");
+    sb.append(joinOp_.name()).append("|");
+    // TODO: add distrMode_ etc. when HBO supports tracking memory usage.
+
+    // Equi-join predicates - cast List<BinaryPredicate> to List<Expr>
+    List<Expr> eqConjsAsExprs = new ArrayList<>(eqJoinConjuncts_);
+    List<String> eqConjStrs = ExprCanonicalizer.canonicalizeExprs(
+        eqConjsAsExprs, strategy);
+    sb.append("EQ:").append(String.join(",", eqConjStrs)).append("|");
+
+    // Other join predicates
+    if (!otherJoinConjuncts_.isEmpty()) {
+      List<String> otherConjStrs = ExprCanonicalizer.canonicalizeExprs(
+          otherJoinConjuncts_, strategy);
+      sb.append("OTHER:").append(String.join(",", otherConjStrs)).append("|");
+    }
+
+    // Sort child keys for commutative join types to create canonical representation
+    if (joinOp_.isInnerJoin() || joinOp_.isCrossJoin() || joinOp_.isFullOuterJoin()) {
+      if (childKeys[0].compareTo(childKeys[1]) > 0) {
+        String tmp = childKeys[0];
+        childKeys[0] = childKeys[1];
+        childKeys[1] = tmp;
+      }
+    }
+    sb.append("LEFT:").append(childKeys[0]).append("|");
+    sb.append("RIGHT:").append(childKeys[1]).append("|");
+
+    // Post-join filters
+    if (!conjuncts_.isEmpty()) {
+      List<String> conjStrs = ExprCanonicalizer.canonicalizeExprs(
+          conjuncts_, strategy);
+      sb.append("WHERE:").append(String.join(",", conjStrs)).append("|");
+    }
+
+    return sb.toString();
   }
 
   /**

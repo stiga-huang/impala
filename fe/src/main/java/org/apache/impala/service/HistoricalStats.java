@@ -52,10 +52,28 @@ public class HistoricalStats {
         List<TPlanNodeRun> runs = (List<TPlanNodeRun>) value;
         boolean foundSimilar = false;
         for (TPlanNodeRun run : runs) {
-          long currInputRows = currRun.num_input_rows;
-          long historicalInputRows = run.num_input_rows;
-          if (Math.abs(historicalInputRows - currInputRows) / currInputRows <= 0.1) {
-            LOG.trace("Ignored HBO stats for {} with strategy level {} (key: {}) because the number of input rows is similar ({} vs {})",
+          if (!currRun.isSetScan_input_rows() || !run.isSetScan_input_rows()) continue;
+          List<Long> currInputRows = currRun.getScan_input_rows();
+          List<Long> historicalInputRows = run.getScan_input_rows();
+          if (currInputRows.size() != historicalInputRows.size()) continue;
+
+          // Check if all scan input rows are similar (within 10% tolerance)
+          boolean allSimilar = true;
+          for (int i = 0; i < currInputRows.size(); i++) {
+            long curr = currInputRows.get(i);
+            long historical = historicalInputRows.get(i);
+            if (curr == 0) {
+              if (historical != 0) {
+                allSimilar = false;
+                break;
+              }
+            } else if (Math.abs(historical - curr) / (double)curr > 0.1) {
+              allSimilar = false;
+              break;
+            }
+          }
+          if (allSimilar) {
+            LOG.trace("Ignored HBO stats for key {} because the scan input rows are similar ({} vs {})",
                 hashKey, historicalInputRows, currInputRows);
             foundSimilar = true;
             break;
@@ -79,12 +97,15 @@ public class HistoricalStats {
    * Returns the first match found, or null if no match exists.
    *
    * @param hashKeys List of hash keys to try (ordered by accuracy)
-   * @param tblName Table name for logging
-   * @param numInputRows Expected number of input rows
+   * @param nodeName Node name for logging
+   * @param scanInputRows List of scan input rows (one per leaf scan node)
    * @return Number of rows from matched historical run, or null if no match
    */
-  public Long getNumRows(List<String> hashKeys, String tblName, long numInputRows) {
-    if (numInputRows == 0) return 0L;
+  public Long getNumRows(List<String> hashKeys, String nodeName, List<Long> scanInputRows) {
+    // Handle empty case
+    if (scanInputRows.isEmpty()) return null;
+    if (scanInputRows.size() == 1 && scanInputRows.get(0) == 0) return 0L;
+
     for (int i = 0; i < hashKeys.size(); i++) {
       String hashKey = hashKeys.get(i);
       Object value = cacheBackend_.getIfPresent(hashKey);
@@ -92,16 +113,33 @@ public class HistoricalStats {
         @SuppressWarnings("unchecked")
         List<TPlanNodeRun> runs = (List<TPlanNodeRun>) value;
         for (TPlanNodeRun run : runs) {
-          long historicalNumInputRows = run.getNum_input_rows();
-          // TODO: make 0.1 configurable
-          if (Math.abs(historicalNumInputRows - numInputRows) / numInputRows > 0.1) {
-            LOG.trace("Ignored HBO stats for {} with strategy level {} (key: {}) because the number of input rows is too different ({} vs {})",
-                tblName, i, hashKey, historicalNumInputRows, numInputRows);
-            continue;
+          if (!run.isSetScan_input_rows()) continue;
+          List<Long> historicalScanInputRows = run.getScan_input_rows();
+
+          // Must have same number of scan nodes
+          if (historicalScanInputRows.size() != scanInputRows.size()) continue;
+
+          // Check each scan input row within 10% tolerance
+          boolean allMatch = true;
+          for (int j = 0; j < scanInputRows.size(); j++) {
+            long current = scanInputRows.get(j);
+            long historical = historicalScanInputRows.get(j);
+            if (current == 0) {
+              if (historical != 0) {
+                allMatch = false;
+                break;
+              }
+            } else if (Math.abs(historical - current) / (double)current > 0.1) {
+              allMatch = false;
+              break;
+            }
           }
-          LOG.info("HBO cache hit for {} using strategy level {} (key: {}, numInputRows: {}): cardinality={}",
-              tblName, i, hashKey, numInputRows, run.getNum_rows());
-          return run.getNum_rows();
+
+          if (allMatch) {
+            LOG.info("HBO cache hit for {} using strategy level {} (key: {}, scanInputRows: {}): cardinality={}",
+                nodeName, i, hashKey, scanInputRows, run.getNum_rows());
+            return run.getNum_rows();
+          }
         }
       } else if (value != null) {
         LOG.warn("Cached value has wrong class: {}", value.getClass().getName());

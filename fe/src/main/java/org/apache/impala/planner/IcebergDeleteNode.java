@@ -34,6 +34,7 @@ import org.apache.impala.common.ThriftSerializationCtx;
 import org.apache.impala.thrift.TExplainLevel;
 import org.apache.impala.thrift.TIcebergDeleteNode;
 import org.apache.impala.thrift.TPlanNode;
+import org.apache.impala.thrift.TPlanNodeRun;
 import org.apache.impala.thrift.TPlanNodeType;
 import org.apache.impala.thrift.TQueryOptions;
 import org.apache.impala.util.MathUtil;
@@ -140,6 +141,21 @@ public class IcebergDeleteNode extends JoinNode {
     msg.join_node.iceberg_delete_node = new TIcebergDeleteNode();
     msg.join_node.iceberg_delete_node.setEq_join_conjuncts(
         getThriftEquiJoinConjuncts(serialCtx));
+
+    // Set HBO hash keys and scan input rows
+    if (!serialCtx.isTupleCache()) {
+      List<String> hboHashKeys = generateHboHashStrings();
+      if (!hboHashKeys.isEmpty()) {
+        msg.setHbo_hash_keys(hboHashKeys);
+
+        // Set scan_input_rows for backend to use when storing HBO stats
+        List<Long> scanInputRows = collectScanInputRows();
+        if (msg.exec_stats == null) {
+          msg.exec_stats = new TPlanNodeRun();
+        }
+        msg.exec_stats.setScan_input_rows(scanInputRows);
+      }
+    }
   }
 
   @Override

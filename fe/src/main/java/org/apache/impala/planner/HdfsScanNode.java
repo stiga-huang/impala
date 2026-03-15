@@ -1713,7 +1713,8 @@ public class HdfsScanNode extends ScanNode {
     }
     if (analyzer.getQueryOptions().use_historical_stats) {
       Long numRowsFromHBO = HistoricalStats.INSTANCE.getNumRows(
-          generateHboHashStrings(), tbl_.getFullName(), getNumInputRows());
+          generateHboHashStrings(), tbl_.getFullName(),
+          Lists.newArrayList(getNumInputRows()));
       if (numRowsFromHBO != null) {
         hboHit_ = true;
         cardinality_ = capCardinalityAtLimit(numRowsFromHBO);
@@ -1910,14 +1911,11 @@ public class HdfsScanNode extends ScanNode {
     msg.setHbo_hash_keys(generateHboHashStrings());
     msg.hdfs_scan_node = new THdfsScanNode(serialCtx.translateTupleId(
         desc_.getId()).asInt(), new HashSet<>());
-    msg.hdfs_scan_node.exec_stats = new TPlanNodeRun();
-    msg.hdfs_scan_node.exec_stats.setCatalog_version(tbl_.getCatalogVersion());
-    long numInputRows = getSampledOrRawPartitions().stream()
-        .mapToLong(FeFsPartition::getNumRows)
-        .sum();
-    msg.hdfs_scan_node.exec_stats.setNum_input_rows(numInputRows);
-    msg.hdfs_scan_node.exec_stats.setNum_input_files(sumValues(totalFilesPerFs_));
-    msg.hdfs_scan_node.exec_stats.setInput_file_size(sumValues(totalBytesPerFs_));
+    msg.exec_stats = new TPlanNodeRun();
+    msg.exec_stats.setCatalog_version(tbl_.getCatalogVersion());
+    msg.exec_stats.setScan_input_rows(Lists.newArrayList(getNumInputRows()));
+    msg.exec_stats.setNum_input_files(sumValues(totalFilesPerFs_));
+    msg.exec_stats.setInput_file_size(sumValues(totalBytesPerFs_));
     // Register this scan node as an input for tuple caching.
     serialCtx.registerInputScanNode(this);
     if (replicaPreference_ != null) {

@@ -42,7 +42,6 @@ import org.apache.impala.analysis.TupleId;
 import org.apache.impala.analysis.ValidTupleIdExpr;
 import org.apache.impala.common.InternalException;
 import org.apache.impala.common.ThriftSerializationCtx;
-import org.apache.impala.service.HistoricalStats;
 import org.apache.impala.thrift.QueryConstants;
 import org.apache.impala.thrift.TAggregationNode;
 import org.apache.impala.thrift.TAggregator;
@@ -50,6 +49,7 @@ import org.apache.impala.thrift.TBackendResourceProfile;
 import org.apache.impala.thrift.TExplainLevel;
 import org.apache.impala.thrift.TExpr;
 import org.apache.impala.thrift.TPlanNode;
+import org.apache.impala.thrift.TPlanNodeRun;
 import org.apache.impala.thrift.TPlanNodeType;
 import org.apache.impala.thrift.TQueryOptions;
 import org.apache.impala.util.BitUtil;
@@ -376,27 +376,7 @@ public class AggregationNode extends PlanNode implements SpillableOperator {
       cardinality_ = capCardinalityAtLimit(cardinality_);
     }
 
-    // Try to get cardinality from HBO
-    List<String> hboHashKeys = generateHboHashStrings();
-    if (!hboHashKeys.isEmpty()) {
-      PlanNode child = getChild(0);
-      while (child instanceof ExchangeNode || child instanceof AggregationNode) {
-        child = child.getChild(0);
-      }
-      if (child instanceof HdfsScanNode) {
-        long numInputRows = ((HdfsScanNode) child).getNumInputRows();
-        Long hboCardinality = HistoricalStats.INSTANCE.getNumRows(
-            hboHashKeys, getDisplayLabel(), numInputRows);
-        if (hboCardinality != null) {
-          cardinality_ = hboCardinality;
-          hboHit_ = true;
-        } else {
-          LOG.debug("No HBO stats for {}. Keys: {}", getDisplayLabel(), hboHashKeys);
-        }
-      } else {
-        // TODO: extend HistoricalStats.getNumRows() to get a list of numInputRows for all scan nodes.
-      }
-    }
+    tryUpdateCardinalityFromHbo(analyzer);
 
     if (LOG.isTraceEnabled()) {
       LOG.trace("{} cardinality=[BeforeConjunct={} AfterConjunct={} AfterLimit={}]",
@@ -885,6 +865,11 @@ public class AggregationNode extends PlanNode implements SpillableOperator {
       List<String> hboHashKeys = generateHboHashStrings();
       if (!hboHashKeys.isEmpty()) {
         msg.setHbo_hash_keys(hboHashKeys);
+        List<Long> scanInputRows = collectScanInputRows();
+        if (msg.exec_stats == null) {
+          msg.exec_stats = new TPlanNodeRun();
+        }
+        msg.exec_stats.setScan_input_rows(scanInputRows);
       }
     }
 

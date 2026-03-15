@@ -50,6 +50,7 @@ import org.apache.impala.planner.RuntimeFilterGenerator.RuntimeFilter;
 import org.apache.impala.planner.TupleCacheInfo.IneligibilityReason;
 import org.apache.impala.planner.TupleCacheInfo.HashTraceElement;
 import org.apache.impala.service.BackendConfig;
+import org.apache.impala.service.HistoricalStats;
 import org.apache.impala.thrift.TExecNodePhase;
 import org.apache.impala.thrift.TExecStats;
 import org.apache.impala.thrift.TExplainLevel;
@@ -326,6 +327,7 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   protected void setDisplayName(String s) { displayName_ = s; }
 
   final protected String getDisplayLabel() {
+    if (id_ == null) return displayName_;
     return String.format("%s:%s", id_.toString(), displayName_);
   }
 
@@ -1009,6 +1011,35 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   }
 
   /**
+   * Collects scan input rows from all leaf scan nodes in the subtree.
+   * This method is used by HBO to track input data sizes for cardinality estimation.
+   * // TODO: cache the result in the node for better performance.
+   */
+  protected List<Long> collectScanInputRows() {
+    List<Long> scanInputRows = new ArrayList<>();
+    for (PlanNode child : children_) {
+      collectScanInputRowsFromChild(child, scanInputRows);
+    }
+    return scanInputRows;
+  }
+
+  /**
+   * Recursively collects scan input rows from all leaf scan nodes.
+   */
+  private void collectScanInputRowsFromChild(PlanNode node, List<Long> scanInputRows) {
+    // TODO: Support other scan nodes. Currently only HdfsScanNode supports
+    // generateHboKeyString().
+    if (node instanceof HdfsScanNode) {
+      scanInputRows.add(((HdfsScanNode) node).getNumInputRows());
+    } else {
+      // Recursively traverse all children to find all leaf scan nodes
+      for (PlanNode child : node.getChildren()) {
+        collectScanInputRowsFromChild(child, scanInputRows);
+      }
+    }
+  }
+
+  /**
    * Generates a single hash string using the specified canonicalization strategy.
    */
   public String generateHboHashString(CanonicalizationStrategy strategy) {
@@ -1044,6 +1075,43 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
     }
 
     return hashStrings;
+  }
+
+  /**
+   * Attempts to update cardinality from Historical Stats (HBO) cache.
+   * This method should be called after initial cardinality computation.
+   *
+   * @param analyzer The analyzer containing query options
+   * @return true if HBO cache hit and cardinality was updated, false otherwise
+   */
+  protected boolean tryUpdateCardinalityFromHbo(Analyzer analyzer) {
+    if (!analyzer.getQueryOptions().use_historical_stats) {
+      return false;
+    }
+
+    List<String> hboHashKeys = generateHboHashStrings();
+    if (hboHashKeys.isEmpty()) {
+      return false;
+    }
+
+    List<Long> scanInputRows = collectScanInputRows();
+    if (scanInputRows.isEmpty()) {
+      return false;
+    }
+
+    Long hboCardinality = HistoricalStats.INSTANCE.getNumRows(
+        hboHashKeys, getDisplayLabel(), scanInputRows);
+    if (hboCardinality != null) {
+      cardinality_ = capCardinalityAtLimit(hboCardinality);
+      hboHit_ = true;
+      LOG.info("HBO cache hit for {}: cardinality={}",
+          getDisplayLabel(), hboCardinality);
+      return true;
+    } else {
+      LOG.debug("No HBO stats for {}. Keys: {}",
+          getDisplayLabel(), hboHashKeys);
+      return false;
+    }
   }
 
   /**

@@ -29,7 +29,7 @@ struct TPlanNodeRun {
 
   // Following fileds are used to compute confidence
   2: optional i64 catalog_version
-  3: optional i64 num_input_rows
+  3: optional list<i64> scan_input_rows
   // Only for file based table scans
   4: optional i64 num_input_files
   5: optional i64 input_file_size

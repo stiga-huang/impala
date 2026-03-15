@@ -371,9 +371,6 @@ struct THdfsScanNode {
   // when new files are being added to a table. For tuple caching, this can improve the
   // cache hits by avoiding unnecessary disruption to the runtime keys.
   16: optional bool schedule_scanranges_oldest_to_newest
-
-  // Execution stats with some input info that will be stored as historical stats for HBO.
-  17: optional HBO.TPlanNodeRun exec_stats
 }
 
 struct TDataSourceScanNode {
@@ -878,6 +875,9 @@ struct TPlanNode {
   // Each key corresponds to a different canonicalization strategy level,
   // ordered from most accurate to most aggressive matching.
   32: optional list<string> hbo_hash_keys
+
+  // Execution stats with some input info that will be stored as historical stats for HBO.
+  33: optional HBO.TPlanNodeRun exec_stats
 }
 
 // A flattened representation of a tree of PlanNodes, obtained by depth-first
