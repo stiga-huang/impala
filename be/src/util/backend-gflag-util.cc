@@ -150,6 +150,10 @@ DECLARE_string(warmup_tables_config_file);
 DECLARE_bool(keeps_warmup_tables_loaded);
 DECLARE_bool(truncate_external_tables_with_hms);
 DECLARE_bool(disable_hms_sync_by_default);
+DECLARE_double(hbo_similarity_threshold);
+DECLARE_int32(hbo_max_runs_per_key);
+DECLARE_int64(hbo_in_memory_backend_cache_size_bytes);
+DECLARE_int32(hbo_in_memory_backend_concurrency_level);
 
 // HS2 SAML2.0 configuration
 // Defined here because TAG_FLAG caused issues in global-flags.cc
@@ -347,6 +351,15 @@ static bool ValidateNonnegativeDouble(const char* flagname, double value) {
   return false;
 }
 
+static bool ValidateHboSimilarityThreshold(const char* flagname, double value) {
+  if (0.0 <= value && value <= 1.0) {
+    return true;
+  }
+  LOG(ERROR) << Substitute(
+      "$0 must be in [0.0, 1.0], value $1 is invalid", flagname, value);
+  return false;
+}
+
 static bool ValidatePositiveInt64(const char* flagname, int64_t value) {
   if (0 < value) {
     return true;
@@ -369,6 +382,10 @@ DEFINE_validator(tuple_cache_cost_coefficient_write_bytes, &ValidateNonnegativeD
 DEFINE_validator(tuple_cache_cost_coefficient_write_rows, &ValidateNonnegativeDouble);
 DEFINE_validator(tuple_cache_cost_coefficient_read_bytes, &ValidateNonnegativeDouble);
 DEFINE_validator(tuple_cache_cost_coefficient_read_rows, &ValidateNonnegativeDouble);
+DEFINE_validator(hbo_similarity_threshold, &ValidateHboSimilarityThreshold);
+DEFINE_validator(hbo_max_runs_per_key, &ValidatePositiveInt32);
+DEFINE_validator(hbo_in_memory_backend_cache_size_bytes, &ValidatePositiveInt64);
+DEFINE_validator(hbo_in_memory_backend_concurrency_level, &ValidatePositiveInt32);
 
 Status GetConfigFromCommand(const string& flag_cmd, string& result) {
   result.clear();
@@ -600,6 +617,12 @@ Status PopulateThriftBackendGflags(TBackendGflags& cfg) {
   cfg.__set_min_jdbc_scan_cardinality(FLAGS_min_jdbc_scan_cardinality);
   cfg.__set_max_stmt_metadata_loader_threads(FLAGS_max_stmt_metadata_loader_threads);
   cfg.__set_disable_hms_sync_by_default(FLAGS_disable_hms_sync_by_default);
+  cfg.__set_hbo_similarity_threshold(FLAGS_hbo_similarity_threshold);
+  cfg.__set_hbo_max_runs_per_key(FLAGS_hbo_max_runs_per_key);
+  cfg.__set_hbo_in_memory_backend_cache_size_bytes(
+      FLAGS_hbo_in_memory_backend_cache_size_bytes);
+  cfg.__set_hbo_in_memory_backend_concurrency_level(
+      FLAGS_hbo_in_memory_backend_concurrency_level);
   return Status::OK();
 }
 

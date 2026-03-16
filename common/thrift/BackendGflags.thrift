@@ -365,4 +365,13 @@ struct TBackendGflags {
   167: required bool disable_hms_sync_by_default
 
   168: required i32 hms_event_catchup_threshold_s
+
+  // Historical Based Optimization (HBO) configuration
+  169: required double hbo_similarity_threshold
+
+  170: required i32 hbo_max_runs_per_key
+
+  171: required i64 hbo_in_memory_backend_cache_size_bytes
+
+  172: required i32 hbo_in_memory_backend_concurrency_level
 }

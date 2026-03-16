@@ -78,10 +78,13 @@ import org.apache.impala.common.ThriftSerializationCtx;
 import org.apache.impala.fb.FbFileBlock;
 import org.apache.impala.planner.RuntimeFilterGenerator.RuntimeFilter;
 import org.apache.impala.service.BackendConfig;
+import org.apache.impala.service.HistoricalStats;
 import org.apache.impala.thrift.TExplainLevel;
 import org.apache.impala.thrift.TExpr;
 import org.apache.impala.thrift.TFileSplitGeneratorSpec;
+import org.apache.impala.thrift.THboHashKeys;
 import org.apache.impala.thrift.TJsonBinaryFormat;
+import org.apache.impala.thrift.THboStatsType;
 import org.apache.impala.thrift.THdfsFileSplit;
 import org.apache.impala.thrift.THdfsScanNode;
 import org.apache.impala.thrift.THdfsStorageDescriptor;
@@ -92,6 +95,7 @@ import org.apache.impala.thrift.TPlanNodeType;
 import org.apache.impala.thrift.TQueryOptions;
 import org.apache.impala.thrift.TReplicaPreference;
 import org.apache.impala.thrift.TRuntimeFilterType;
+import org.apache.impala.thrift.TPlanNodeRun;
 import org.apache.impala.thrift.TScanRange;
 import org.apache.impala.thrift.TScanRangeLocation;
 import org.apache.impala.thrift.TScanRangeLocationList;
@@ -432,6 +436,19 @@ public class HdfsScanNode extends ScanNode {
   // Return sampledPartitions_ if not null. Otherwise, return partitions_.
   private List<FeFsPartition> getSampledOrRawPartitions() {
     return sampledPartitions_ == null ? partitions_ : sampledPartitions_;
+  }
+
+  /**
+   * Returns the total number of input rows (from HMS stats) for the selected partitions.
+   */
+  public long getNumInputRows() {
+    long sum = 0;
+    for (FeFsPartition part : getSampledOrRawPartitions()) {
+      // TODO: consider using HBO stats if numRows=-1
+      if (part.getNumRows() < 0) return -1;
+      sum += part.getNumRows();
+    }
+    return sum;
   }
 
   /**
@@ -1710,8 +1727,26 @@ public class HdfsScanNode extends ScanNode {
       inputCardinality_ = totalFiles;
       cardinality_ = totalFiles;
     }
-    if (LOG.isTraceEnabled()) {
-      LOG.trace("HdfsScan: cardinality_=" + Long.toString(cardinality_));
+    updateCardinalityFromHBO(analyzer);
+    LOG.info("HdfsScan: cardinality_={}", cardinality_);
+  }
+
+  public void updateCardinalityFromHBO(Analyzer analyzer) {
+    if (analyzer.getQueryOptions().use_historical_stats) {
+      List<String> hashKeys = generateHboHashStrings(THboStatsType.CARDINALITY);
+      TPlanNodeRun currRun = new TPlanNodeRun();
+      currRun.setScan_input_rows(Lists.newArrayList(getNumInputRows()));
+      currRun.setCatalog_version(tbl_.getCatalogVersion());
+      currRun.setInput_file_size(sumValues(totalBytesPerFs_));
+      Long numRowsFromHBO = HistoricalStats.INSTANCE.getNumScanOutputRows(
+          hashKeys, tbl_.getFullName(), currRun);
+      if (numRowsFromHBO != null) {
+        hasHboCard_ = true;
+        cardinality_ = capCardinalityAtLimit(numRowsFromHBO);
+      } else {
+        LOG.warn("No HBO stats for {} using hash keys {}",
+            tbl_.getFullName(), hashKeys);
+      }
     }
   }
 
@@ -1860,10 +1895,66 @@ public class HdfsScanNode extends ScanNode {
     Preconditions.checkState(false, "Unexpected use of old toThrift() signature.");
   }
 
+  /**
+   * Generates an unhashed HBO key string for this scan node.
+   * This key string can be incorporated by parent nodes into their HBO keys.
+   */
+  @Override
+  public String generateHboKeyString(THboStatsType statsType,
+      CanonicalizationStrategy strategy) {
+    // Start with stats type prefix
+    StringBuilder sb = new StringBuilder(statsType.name()).append(":");
+    sb.append("ScanNode:");
+    // Use the full path including collection columns if available
+    if (desc_.getPath() != null) {
+      sb.append(desc_.getPath().toString());
+    } else {
+      sb.append(tbl_.getFullName());
+    }
+    sb.append("|");
+
+    // Canonicalize partition conjuncts and regular conjuncts.
+    List<String> partConjStrings =
+        ExprCanonicalizer.canonicalizeScanConjuncts(partitionConjuncts_, tbl_, strategy);
+    List<String> conjStrings =
+        ExprCanonicalizer.canonicalizeScanConjuncts(conjuncts_, tbl_, strategy);
+
+    for (String s: partConjStrings) {
+      sb.append(s).append("|");
+      LOG.debug("<<<HBO>>> PARTITION CONJUNCT STR ({}, {}): {}", statsType, strategy, s);
+    }
+    for (String s: conjStrings) {
+      sb.append(s).append("|");
+      LOG.debug("<<<HBO>>> CONJUNCT STR ({}, {}): {}", statsType, strategy, s);
+    }
+
+    if (limit_ != -1) {
+      sb.append("LIMIT:").append(limit_);
+    }
+    return sb.toString();
+  }
+
   @Override
   protected void toThrift(TPlanNode msg, ThriftSerializationCtx serialCtx) {
     msg.hdfs_scan_node = new THdfsScanNode(serialCtx.translateTupleId(
         desc_.getId()).asInt(), new HashSet<>());
+    if (!serialCtx.isTupleCache()) {
+      msg.exec_stats = new TPlanNodeRun();
+      msg.exec_stats.setCatalog_version(tbl_.getCatalogVersion());
+      msg.exec_stats.setScan_input_rows(Lists.newArrayList(getNumInputRows()));
+      msg.exec_stats.setNum_input_files(sumValues(totalFilesPerFs_));
+      msg.exec_stats.setInput_file_size(sumValues(totalBytesPerFs_));
+      if (msg.exec_stats.getScan_input_rows().get(0) < 0) {
+        // If numRows are unknown for some selected partitions, only allow identical
+        // matching.
+        String identicalHashKey = generateHboHashString(THboStatsType.CARDINALITY,
+            CanonicalizationStrategy.EXPR_REWRITE);
+        msg.setHbo_hash_keys(Lists.newArrayList(new THboHashKeys(
+            THboStatsType.CARDINALITY, Lists.newArrayList(identicalHashKey))));
+      } else {
+        msg.setHbo_hash_keys(generateAllHboHashKeys());
+      }
+    }
     // Register this scan node as an input for tuple caching.
     serialCtx.registerInputScanNode(this);
     if (replicaPreference_ != null) {

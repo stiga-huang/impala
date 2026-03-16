@@ -636,4 +636,20 @@ public class BackendConfig {
   public void setDisableHmsSyncByDefault(boolean disableHmsSyncByDefault) {
     backendCfg_.disable_hms_sync_by_default = disableHmsSyncByDefault;
   }
+
+  public double getHboSimilarityThreshold() {
+    return backendCfg_.hbo_similarity_threshold;
+  }
+
+  public int getHboMaxRunsPerKey() {
+    return backendCfg_.hbo_max_runs_per_key;
+  }
+
+  public long getHboInMemoryBackendCacheSizeBytes() {
+    return backendCfg_.hbo_in_memory_backend_cache_size_bytes;
+  }
+
+  public int getHboInMemoryBackendConcurrencyLevel() {
+    return backendCfg_.hbo_in_memory_backend_concurrency_level;
+  }
 }

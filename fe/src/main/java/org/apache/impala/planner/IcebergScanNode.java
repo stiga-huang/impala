@@ -39,13 +39,17 @@ import org.apache.impala.catalog.Type;
 import org.apache.impala.common.ImpalaRuntimeException;
 import org.apache.impala.common.ThriftSerializationCtx;
 import org.apache.impala.fb.FbIcebergDataFileFormat;
+import org.apache.impala.service.HistoricalStats;
 import org.apache.impala.thrift.TExplainLevel;
+import org.apache.impala.thrift.THboStatsType;
 import org.apache.impala.thrift.TPlanNode;
+import org.apache.impala.thrift.TPlanNodeRun;
 import org.apache.impala.util.MathUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
 
 /**
  * Scan of a single iceberg table.
@@ -183,6 +187,7 @@ public class IcebergScanNode extends HdfsScanNode {
       inputCardinality_ = fileDescs_.size();
       cardinality_ = fileDescs_.size();
     }
+    updateCardinalityFromHBO(analyzer);
     if (LOG.isTraceEnabled()) {
       LOG.trace("IcebergScanNode: cardinality_=" + Long.toString(cardinality_));
     }
@@ -241,6 +246,13 @@ public class IcebergScanNode extends HdfsScanNode {
           ((IcebergFileDescriptor)fd).getFbFileMetadata().icebergMetadata().partId());
     }
     return selectedPartitions.cardinality();
+  }
+
+  @Override
+  public long getNumInputRows() {
+    return fileDescs_.stream()
+        .mapToLong(fd -> fd.getFbFileMetadata().icebergMetadata().recordCount())
+        .sum();
   }
 
   // Returns the number of partitions in the current snapshot, cached by catalog after

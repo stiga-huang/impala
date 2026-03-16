@@ -789,7 +789,7 @@ string Coordinator::FilterDebugString() {
 }
 
 void Coordinator::ComputeEffectiveFilterTargets() {
-  DCHECK(effective_filter_targets_.empty());
+  DCHECK(effective_filter_targets_.empty()) << effective_filter_targets_.size();
   DCHECK(query_profile_ != nullptr);
 
   // Track the current scan node id as we traverse the profile tree.
@@ -844,6 +844,10 @@ void Coordinator::ComputeEffectiveFilterTargets() {
         }
       };
   find_effective_filters(query_profile_);
+}
+
+const std::map<int32_t, std::set<TPlanNodeId>>& Coordinator::GetEffectiveFilterTargets() {
+  return effective_filter_targets_;
 }
 
 const char* Coordinator::ExecStateToString(const ExecState state) {
@@ -1884,8 +1888,6 @@ void Coordinator::MarkCancelledNodes(TExecSummary* exec_summary) {
         break;
       }
     }
-    // Append a "cancelled" marker which will be shown in the Detail column in the
-    // ExecSummary table.
     if (has_cancelled_instance) {
       node.label_detail += " (cancelled)";
     }

@@ -225,6 +225,24 @@ abstract public class Expr extends TreeNode<Expr> implements ParseNode, Cloneabl
         public boolean apply(Expr arg) { return arg instanceof BinaryPredicate; }
       };
 
+  // Returns true if the expression is an equality predicate (= or IN).
+  // Range predicates (<, >, <=, >=, BETWEEN) are NOT equality predicates.
+  public static final com.google.common.base.Predicate<Expr> IS_EQUALITY_PREDICATE =
+      new com.google.common.base.Predicate<Expr>() {
+        @Override
+        public boolean apply(Expr arg) {
+          if (arg instanceof BinaryPredicate) {
+            BinaryPredicate binPred = (BinaryPredicate) arg;
+            return binPred.getOp() == Operator.EQ
+                || binPred.getOp() == Operator.NOT_DISTINCT;
+          }
+          if (arg instanceof InPredicate) {
+            return true;
+          }
+          return false;
+        }
+      };
+
   public static final com.google.common.base.Predicate<Expr>
     IS_EXPR_EQ_LITERAL_PREDICATE = new com.google.common.base.Predicate<Expr>() {
     @Override

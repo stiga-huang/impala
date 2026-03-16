@@ -50,9 +50,12 @@ import org.apache.impala.planner.RuntimeFilterGenerator.RuntimeFilter;
 import org.apache.impala.planner.TupleCacheInfo.IneligibilityReason;
 import org.apache.impala.planner.TupleCacheInfo.HashTraceElement;
 import org.apache.impala.service.BackendConfig;
+import org.apache.impala.service.HistoricalStats;
 import org.apache.impala.thrift.TExecNodePhase;
 import org.apache.impala.thrift.TExecStats;
 import org.apache.impala.thrift.TExplainLevel;
+import org.apache.impala.thrift.THboHashKeys;
+import org.apache.impala.thrift.THboStatsType;
 import org.apache.impala.thrift.TPlan;
 import org.apache.impala.thrift.TPlanNode;
 import org.apache.impala.thrift.TQueryOptions;
@@ -68,6 +71,8 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import com.google.common.hash.Hasher;
+import com.google.common.hash.Hashing;
 
 /**
  * Each PlanNode represents a single relational operator
@@ -188,6 +193,9 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   protected boolean hasHardEstimates_ = false;
 
   protected TupleCacheInfo tupleCacheInfo_;
+
+  // True if the cardinality is from HBO stats.
+  protected boolean hasHboCard_ = false;
 
   protected PlanNode(PlanNodeId id, List<TupleId> tupleIds, String displayName) {
     this(id, displayName);
@@ -413,13 +421,16 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
       expBuilder.append("row-size=")
           .append(PrintUtils.printBytes(Math.round(avgRowSize_)))
           .append(" cardinality=");
-      if (filteredCardinality_ > -1) {
+      if (!hasHboCard_ &&filteredCardinality_ > -1) {
         expBuilder.append(PrintUtils.printEstCardinality(filteredCardinality_))
             .append("(filtered from ")
             .append(PrintUtils.printEstCardinality(cardinality_))
             .append(")");
       } else {
         expBuilder.append(PrintUtils.printEstCardinality(cardinality_));
+      }
+      if (hasHboCard_) {
+        expBuilder.append(" (from HBO)");
       }
       if (Planner.isProcessingCostAvailable(queryOptions)) {
         // Show processing cost total.
@@ -972,6 +983,83 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
    * into pipelined units for resource estimation.
    */
   public boolean isBlockingNode() { return false; }
+
+  /**
+   * Generates an HBO key string for this node, or null if HBO is not supported.
+   * This key string represents the logical characteristics that identify similar
+   * operations that could benefit from shared historical statistics.
+   *
+   * Nodes that support HBO should override this method to return a descriptive
+   * key string (not hashed). The key will be incorporated into parent nodes'
+   * HBO keys to create a hierarchical identification system. The key string
+   * should include the stats type as a prefix.
+   *
+   * @return A key string identifying this node's characteristics, or null if
+   *         HBO is not supported for this node type.
+   */
+  public String generateHboKeyString(THboStatsType statsType,
+      CanonicalizationStrategy strategy) {
+    return null;
+  }
+
+  /**
+   * Generates a single hash string using the specified stats type and canonicalization strategy.
+   */
+  public String generateHboHashString(THboStatsType statsType,
+      CanonicalizationStrategy strategy) {
+    Hasher hasher = Hashing.murmur3_128().newHasher();
+    String keyString = generateHboKeyString(statsType, strategy);
+    if (keyString == null) return null;
+    LOG.debug("{} HBO Key string ({}, {}): {}", getDisplayLabel(), statsType, strategy,
+        keyString);
+    hasher.putUnencodedChars(keyString);
+    return hasher.hash().toString();
+  }
+
+  /**
+   * Returns a list of hash strings for History-Based Optimization (HBO) for a specific
+   * statistics type. Each string corresponds to a different canonicalization strategy, ordered
+   * from most accurate (EXPR_REWRITE) to most aggressive (IGNORE_PARTITION_CONSTANTS).
+   * The list allows HBO to try multiple matching strategies with increasing tolerance.
+   */
+  public List<String> generateHboHashStrings(THboStatsType statsType) {
+    List<String> hashStrings = new ArrayList<>();
+
+    // Generate hash string for each canonicalization strategy
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      String hashString = generateHboHashString(statsType, strategy);
+      // Break if the node doesn't support HBO.
+      if (hashString == null) break;
+      LOG.info("{} HBO Strategy {} statsType {} hash: {}", getDisplayLabel(), strategy, statsType, hashString);
+      if (hashStrings.contains(hashString)) {
+        LOG.debug("Ignoring duplicate hash string for strategy {}: {}",
+            strategy, hashString);
+      } else {
+        hashStrings.add(hashString);
+      }
+    }
+
+    return hashStrings;
+  }
+
+  /**
+   * Generates HBO hash keys for all statistics types (cardinality and peak memory).
+   * Returns a list of THboHashKeys, each containing the statistics type and
+   * corresponding hash keys for different canonicalization strategies.
+   *
+   * @return List of THboHashKeys grouped by statistics type, or empty list if HBO
+   *         is not supported for this node
+   */
+  public List<THboHashKeys> generateAllHboHashKeys() {
+    List<THboHashKeys> result = new ArrayList<>();
+
+    List<String> cardinalityKeys = generateHboHashStrings(THboStatsType.CARDINALITY);
+    if (!cardinalityKeys.isEmpty()) {
+      result.add(new THboHashKeys(THboStatsType.CARDINALITY, cardinalityKeys));
+    }
+
+    return result;
+  }
 
   /**
    * Fills in 'pipelines_' with the pipelines that this PlanNode is a member of.

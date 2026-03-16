@@ -1453,6 +1453,20 @@ Status ImpalaServer::ExecuteInternal(const TQueryCtx& query_ctx,
   return Status::OK();
 }
 
+vector<const TPlanNode*> ImpalaServer::GetPlanNodesWithHboKeys(const TExecRequest& exec_request) {
+  vector<const TPlanNode*> nodes_with_hbo_keys;
+  for (const TPlanExecInfo& plan_exec_info: exec_request.query_exec_request.plan_exec_info) {
+    for (const TPlanFragment& fragment: plan_exec_info.fragments) {
+      for (const TPlanNode& node: fragment.plan.nodes) {
+        if (node.__isset.hbo_hash_keys && !node.hbo_hash_keys.empty()) {
+          nodes_with_hbo_keys.push_back(&node);
+        }
+      }
+    }
+  }
+  return nodes_with_hbo_keys;
+}
+
 void ImpalaServer::PrepareQueryContext(TQueryCtx* query_ctx) {
   PrepareQueryContext(exec_env_->configured_backend_address().hostname,
       exec_env_->krpc_address(), query_ctx);
@@ -1639,6 +1653,92 @@ void ImpalaServer::UpdateExecSummary(const QueryHandle& query_handle) const {
   query_handle->summary_profile()->AddInfoStringRedacted("Errors", join(errors, "\n"));
 }
 
+Status ImpalaServer::StoreExecutionStats(const QueryHandle& query_handle) {
+  if (!query_handle->query_options().store_historical_stats) {
+    return Status::OK();
+  }
+  if (query_handle->exec_state() != ClientRequestState::ExecState::FINISHED) {
+    VLOG_QUERY << "Skip execution stats for query " << PrintId(query_handle->query_id())
+        << " since query state is "
+        << ClientRequestState::ExecStateToString(query_handle->exec_state());
+    return Status::OK();
+  }
+
+  const TExecRequest& exec_req = query_handle->exec_request();
+  TExecSummary summary;
+  if (query_handle->GetCoordinator() == nullptr) {
+    LOG(ERROR) << "ExecSummary not found for HBO!";
+    return Status("ExecSummary not found for HBO");
+  }
+
+  query_handle->GetCoordinator()->GetTExecSummary(&summary);
+  map<TPlanNodeId, TPlanNodeExecSummary> exec_summaries;
+  for (const TPlanNodeExecSummary& s: summary.nodes) {
+    exec_summaries[s.node_id] = s;
+  }
+
+  const auto& effective_filter_ids_to_node_ids =
+      query_handle->GetCoordinator()->GetEffectiveFilterTargets();
+
+  THistoricalStatsUpdate history_stats;
+  for (const TPlanNode* p : GetPlanNodesWithHboKeys(exec_req)) {
+    // Skip nodes if runtime filters have filtered some rows. The output cardinality
+    // depends on when the runtime filters arrive, which is unreliable.
+    bool has_external_filter = false;
+    for (const TRuntimeFilterDesc& f : p->runtime_filters) {
+      auto it = effective_filter_ids_to_node_ids.find(f.filter_id);
+      if (it != effective_filter_ids_to_node_ids.end()
+          && it->second.find(p->node_id) != it->second.end()) {
+        has_external_filter = true;
+        break;
+      }
+    }
+    if (has_external_filter) {
+      VLOG_QUERY << "Skip execution stats of " << p->label
+                 << " since it has effective runtime filters";
+      continue;
+    }
+
+    // TODO: store the cumulative TExecStats instead of just cardinality
+    int64_t cardinality = 0;
+    bool all_instances_finished = true;
+    for (const TExecStats& stat: exec_summaries[p->node_id].exec_stats) {
+      cardinality += stat.cardinality;
+      if (stat.__isset.last_batch_returned && !stat.last_batch_returned) {
+        all_instances_finished = false;
+      }
+    }
+    if (!all_instances_finished) {
+      VLOG_QUERY << "Skip execution stats of " << p->node_id << ":" << p->label
+                 << " - not all instances finished (Last Batch Returned)";
+      continue;
+    }
+
+    TPlanNodeRun stats;
+    // Use the pre-populated exec_stats
+    if (!p->__isset.exec_stats) {
+      VLOG_QUERY << "<<<HBO>>>No exec_stats from FE for node " << p->node_id << " " << p->label_detail;
+      continue;
+    }
+    stats = p->exec_stats;
+    stats.__set_num_rows(cardinality);
+
+    // Store stats under all hash keys for all statistics types
+    DCHECK(p->__isset.hbo_hash_keys && !p->hbo_hash_keys.empty());
+    for (const THboHashKeys& hbo_keys : p->hbo_hash_keys) {
+      TPlanNodeRunWithKeys run_with_keys;
+      run_with_keys.run = stats;
+      run_with_keys.hash_keys = hbo_keys.hash_keys;
+      run_with_keys.__set_stats_type(hbo_keys.stats_type);
+      history_stats.plan_node_runs.push_back(run_with_keys);
+    }
+    history_stats.__isset.plan_node_runs = true;
+  }
+  if (history_stats.plan_node_runs.empty()) return Status::OK();
+  VLOG_QUERY << "Storing history stats for query " << PrintId(query_handle->query_id());
+  return exec_env_->frontend()->StoreExecStats(history_stats);
+}
+
 Status ImpalaServer::UnregisterQuery(
     const TUniqueId& query_id, const Status* cause, bool interrupted) {
   VLOG_QUERY << "UnregisterQuery(): query_id=" << PrintId(query_id);
@@ -1745,6 +1845,7 @@ void ImpalaServer::CloseClientRequestState(const QueryHandle& query_handle) {
 
   if (query_handle->GetCoordinator() != nullptr) {
     UpdateExecSummary(query_handle);
+    discard_result(StoreExecutionStats(query_handle));
   }
 
   if (query_handle->schedule() != nullptr) {
