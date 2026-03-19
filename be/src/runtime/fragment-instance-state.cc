@@ -208,6 +208,13 @@ Status FragmentInstanceState::Prepare() {
   if (instance_ctx_.__isset.debug_options) {
     ExecNode::SetDebugOptions(instance_ctx_.debug_options, exec_tree_);
   }
+  std::function<void(ExecNode*)> build_node_map = [&](ExecNode* node) {
+    exec_node_map_[node->id()] = node;
+    for (int i = 0; i < node->num_children(); ++i) {
+      build_node_map(node->child(i));
+    }
+  };
+  build_node_map(exec_tree_);
 
   // set #senders of exchange nodes before calling Prepare()
   vector<ExecNode*> exch_nodes;
@@ -341,7 +348,10 @@ void FragmentInstanceState::GetStatusReport(FragmentInstanceExecStatusPB* instan
     if (is_plan_node || is_data_sink) {
       ExecSummaryDataPB* summary_data = instance_status->add_exec_summary_data();
       if (is_plan_node) {
-        summary_data->set_plan_node_id(node->metadata().plan_node_id);
+        TPlanNodeId node_id = node->metadata().plan_node_id;
+        summary_data->set_plan_node_id(node_id);
+        summary_data->set_last_batch_returned(
+            exec_node_map_[node_id]->last_batch_returned());
       } else {
         summary_data->set_data_sink_id(node->metadata().data_sink_id);
       }

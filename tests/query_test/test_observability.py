@@ -159,6 +159,23 @@ class TestObservability(ImpalaTestSuite):
     assert result.exec_summary[0]['peak_mem'] >= 0
     assert result.exec_summary[0]['est_peak_mem'] >= 0
 
+  def test_cancelled_nodes_in_exec_summary(self):
+    """Test nodes that don't complete are marked as cancelled"""
+    query = """
+        with l as (select * from tpch.lineitem UNION ALL select * from tpch.lineitem)
+        select STRAIGHT_JOIN count(*) from
+          (select * from tpch.lineitem a LIMIT 1) a
+        join
+          (select * from l LIMIT 125000) b
+        on a.l_orderkey = -b.l_orderkey"""
+    result = self.client.execute(query, fetch_exec_summary=True)
+    assert result.exec_summary[8]['operator'] == '03:SCAN HDFS'
+    assert result.exec_summary[8]['detail'] == 'tpch.lineitem (cancelled)'
+    assert result.exec_summary[9]['operator'] == '02:SCAN HDFS'
+    assert result.exec_summary[9]['detail'] == 'tpch.lineitem (cancelled)'
+    assert result.exec_summary[12]['operator'] == '00:SCAN HDFS'
+    assert result.exec_summary[12]['detail'] == 'tpch.lineitem a'
+
   def test_query_options(self):
     """Test that the query profile shows expected non-default query options, both set
     explicitly through client and those set by planner"""
