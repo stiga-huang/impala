@@ -17,6 +17,7 @@
 
 #include "runtime/coordinator.h"
 #include <cerrno>
+#include <charconv>
 #include <iomanip>
 #include <list>
 #include <sstream>
@@ -63,6 +64,7 @@
 #include "util/in-list-filter.h"
 #include "util/min-max-filter.h"
 #include "util/pretty-printer.h"
+#include "util/string-util.h"
 #include "util/summary-util.h"
 #include "util/table-printer.h"
 #include "util/uid-util.h"
@@ -74,7 +76,9 @@ using kudu::rpc::RpcController;
 using kudu::rpc::RpcSidecar;
 using namespace apache::thrift;
 using namespace rapidjson;
+using boost::algorithm::ends_with;
 using boost::algorithm::iequals;
+using boost::algorithm::istarts_with;
 using boost::algorithm::is_any_of;
 using boost::algorithm::join;
 using boost::algorithm::token_compress_on;
@@ -644,6 +648,7 @@ string Coordinator::FilterDebugString() {
   table_printer.AddColumn("ID", false);
   table_printer.AddColumn("Src. Node", false);
   table_printer.AddColumn("Tgt. Node(s)", false);
+  table_printer.AddColumn("Eff. Tgt. Node(s)", false);
   table_printer.AddColumn("Target type", false);
   table_printer.AddColumn("Partition filter", false);
   // Distribution metrics are only meaningful if the coordinator is routing the filter.
@@ -658,8 +663,6 @@ string Coordinator::FilterDebugString() {
   table_printer.AddColumn("Min value", false);
   table_printer.AddColumn("Max value", false);
   table_printer.AddColumn("In-list size", false);
-  ObjectPool temp_object_pool;
-  MemTracker temp_mem_tracker;
   for (auto& v: filter_routing_table_->id_to_filter) {
     vector<string> row;
     const FilterState& state = v.second;
@@ -674,6 +677,14 @@ string Coordinator::FilterDebugString() {
       partition_filter.push_back(target.is_bound_by_partition_columns ? "true" : "false");
     }
     row.push_back(join(target_ids, ", "));
+    vector<string> effective_target_ids;
+    auto eff_it = effective_filter_targets_.find(v.first);
+    if (eff_it != effective_filter_targets_.end()) {
+      for (TPlanNodeId node_id : eff_it->second) {
+        effective_target_ids.push_back(lexical_cast<string>(node_id));
+      }
+    }
+    row.push_back(effective_target_ids.empty() ? "N" : join(effective_target_ids, ", "));
     row.push_back(join(target_types, ", "));
     row.push_back(join(partition_filter, ", "));
 
@@ -772,10 +783,67 @@ string Coordinator::FilterDebugString() {
     }
     table_printer.AddRow(row);
   }
-  temp_mem_tracker.Close();
   // Add a line break, as in all contexts this is called we need to start a new line to
   // print it correctly.
   return Substitute("\n$0", table_printer.ToString());
+}
+
+void Coordinator::ComputeEffectiveFilterTargets() {
+  DCHECK(effective_filter_targets_.empty());
+  DCHECK(query_profile_ != nullptr);
+
+  // Track the current scan node id as we traverse the profile tree.
+  TPlanNodeId curr_scan_node_id = -1;
+  std::function<void(RuntimeProfileBase*)> find_effective_filters =
+      [&curr_scan_node_id, &find_effective_filters, this](RuntimeProfileBase* profile) {
+        std::string_view profile_name = profile->name();
+        vector<std::string_view> fields;
+        SplitStrView(profile_name, ' ', &fields);
+        if (istarts_with(profile_name, RuntimeProfile::PREFIX_FILTER)) {
+          // profile name example: "Filter 2 (1.00 MB)". fields[1] is the filter id.
+          DCHECK(fields.size() > 1);
+          DCHECK(curr_scan_node_id >= 0);
+          vector<RuntimeProfileBase::Counter*> rejected_counters;
+          profile->GetLocalCountersWithSuffix(" rejected", &rejected_counters);
+          bool effective = false;
+          for (auto* counter : rejected_counters) {
+            if (counter->value() > 0) {
+              effective = true;
+              break;
+            }
+          }
+          if (effective && fields.size() > 1 && curr_scan_node_id >= 0) {
+            int32_t filter_id = 0;
+            auto [ptr, ec] = std::from_chars(
+                fields[1].data(), fields[1].data() + fields[1].size(), filter_id);
+            if (ec == std::errc()) {
+              effective_filter_targets_[filter_id].insert(curr_scan_node_id);
+            } else {
+              LOG(ERROR) << "Failed to parse filter id from profile: " << profile_name;
+              return;
+            }
+          }
+        } else if (fields.size() > 1 && ends_with(fields[0], "SCAN_NODE")) {
+          // profile name example: "HDFS_SCAN_NODE (id=2)". fields[1] is "(id=2)".
+          if (fields[1].size() <= 5) {
+            LOG(ERROR) << "Invalid scan node name in profile: " << profile_name;
+            return;
+          }
+          std::string_view node_id_sv = fields[1].substr(4, fields[1].size() - 5);
+          auto [ptr, ec] = std::from_chars(node_id_sv.data(),
+              node_id_sv.data() + node_id_sv.size(), curr_scan_node_id);
+          if (ec != std::errc()) {
+            LOG(ERROR) << "Failed to parse scan node id from profile: " << profile_name;
+            return;
+          }
+        }
+        vector<RuntimeProfileBase*> children;
+        profile->GetChildren(&children);
+        for (RuntimeProfileBase* child : children) {
+          find_effective_filters(child);
+        }
+      };
+  find_effective_filters(query_profile_);
 }
 
 const char* Coordinator::ExecStateToString(const ExecState state) {
@@ -1431,6 +1499,15 @@ void Coordinator::ComputeQuerySummary() {
   query_profile_->AddInfoString("Per Node Bytes Read", bytes_read_info.str());
   query_profile_->AddInfoString("Per Node User Time", cpu_user_info.str());
   query_profile_->AddInfoString("Per Node System Time", cpu_system_info.str());
+
+  // Also updates the final filter table.
+  ComputeEffectiveFilterTargets();
+  {
+    lock_guard<shared_mutex> lock(filter_routing_table_->lock);
+    if (filter_routing_table_->num_filters() > 0) {
+      query_profile_->AddInfoString("Final filter table", FilterDebugString());
+    }
+  }
 }
 
 string Coordinator::GetErrorLog() {
@@ -1445,9 +1522,6 @@ string Coordinator::GetErrorLog() {
 
 void Coordinator::ReleaseExecResources() {
   lock_guard<shared_mutex> lock(filter_routing_table_->lock); // Exclusive lock.
-  if (filter_routing_table_->num_filters() > 0) {
-    query_profile_->AddInfoString("Final filter table", FilterDebugString());
-  }
 
   for (auto& filter : filter_routing_table_->id_to_filter) {
     unique_lock<SpinLock> l(filter.second.lock());

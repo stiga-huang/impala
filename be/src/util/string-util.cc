@@ -150,4 +150,20 @@ void StringStreamPop::move_back() {
   }
 }
 
+void SplitStrView(const std::string_view& str, char delimiter,
+    std::vector<std::string_view>* result) {
+  size_t start = 0;
+  size_t end = str.find(delimiter);
+  while (end != std::string_view::npos) {
+    // Skip empty tokens due to consecutive delimiters.
+    if (start != end) {
+      result->push_back(str.substr(start, end - start));
+    }
+    start = end + 1;
+    end = str.find(delimiter, start);
+  }
+  if (start < str.size()) {
+    result->push_back(str.substr(start));
+  }
+}
 }

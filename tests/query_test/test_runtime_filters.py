@@ -488,3 +488,25 @@ class TestRuntimeFiltersLateRemoteUpdate(ImpalaTestSuite):
     assert duration_s < (WAIT_TIME_MS / 1000), \
         "Query took too long (%ss, possibly waiting for late filters?)" \
         % str(duration_s)
+
+
+@pytest.mark.execute_serially
+@SkipIfLocal.multiple_impalad
+class TestTpchRuntimeFilters(ImpalaTestSuite):
+  """Test runtime filters for TPCH queries."""
+
+  @classmethod
+  def get_workload(cls):
+    return 'tpch'
+
+  @classmethod
+  def add_test_dimensions(cls):
+    super(TestTpchRuntimeFilters, cls).add_test_dimensions()
+    # Only test parquet/none format
+    cls.ImpalaTestMatrix.add_constraint(
+        lambda v: v.get_value('table_format').file_format == 'parquet'
+        and v.get_value('table_format').compression_codec == 'none')
+
+  def test_tpch_q5_final_filter_table(self, vector):
+    """Verify the runtime filter table for TPCH-Q5"""
+    self.run_test_case('effective-runtime-filter', vector)

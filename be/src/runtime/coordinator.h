@@ -18,7 +18,9 @@
 #pragma once
 
 #include <list>
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 #include <utility>
@@ -462,6 +464,10 @@ class Coordinator { // NOLINT: The member variables could be re-ordered to save 
   /// Contains all the state about filters being handled by this coordinator.
   std::unique_ptr<FilterRoutingTable> filter_routing_table_;
 
+  /// Cached map from filter ID to target node IDs where the filter rejected data.
+  /// Populated by ComputeEffectiveFilterTargets().
+  std::map<int32_t, std::set<TPlanNodeId>> effective_filter_targets_;
+
   /// True if the first row has been fetched, false otherwise.
   bool first_row_fetched_ = false;
 
@@ -479,6 +485,11 @@ class Coordinator { // NOLINT: The member variables could be re-ordered to save 
   /// Returns a pretty-printed table of the current filter state.
   /// Caller must have exclusive access to filter_lock_.
   std::string FilterDebugString();
+
+  /// Computes which runtime filter targets actually rejected data by walking
+  /// the query profile. Populates effective_filter_targets_.
+  /// Must be called after all backend profiles have been aggregated.
+  void ComputeEffectiveFilterTargets();
 
   /// Called when the query is done executing due to reaching EOS or client
   /// cancellation. If 'exec_state_' != EXECUTING, does nothing. Otherwise sets

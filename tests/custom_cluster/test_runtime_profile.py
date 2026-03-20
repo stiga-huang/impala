@@ -48,3 +48,9 @@ class TestRuntimeProfile(CustomClusterTestSuite):
                                add_executors=True,
                                expected_num_impalads=4)
     self.run_test_case('runtime-profile-aggregated', vector)
+
+  @pytest.mark.execute_serially
+  @CustomClusterTestSuite.with_args('--gen_experimental_profile=true')
+  def test_tpch_q5_final_filter_table(self, vector):
+    """Verify the runtime filter table for TPCH-Q5"""
+    self.run_test_case('effective-runtime-filter', vector)

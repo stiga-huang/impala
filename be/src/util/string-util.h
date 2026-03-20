@@ -19,6 +19,7 @@
 #define IMPALA_UTIL_STRING_UTIL_H
 
 #include <string>
+#include <string_view>
 
 #include "common/status.h"
 
@@ -106,6 +107,13 @@ public:
   /// requires writing at least one character to the stream after this function is called.
   void move_back();
 };
+
+/// Zero-allocation split to replace boost::algorithm::split.
+/// TODO: use boost::algorithm::split when upgrading to C++20. In C++17,
+/// std::string_view does not have an (iterator, iterator) constructor so boost
+/// split() can't compile with it.
+void SplitStrView(const std::string_view& str, char delimiter,
+    std::vector<std::string_view>* result);
 
 }
 #endif

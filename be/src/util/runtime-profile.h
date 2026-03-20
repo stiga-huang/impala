@@ -171,6 +171,11 @@ class RuntimeProfileBase {
   /// in any of the child profiles to 'counters'.
   void GetCounters(const std::string& name, std::vector<Counter*>* counters);
 
+  /// Collects counters whose names end with 'suffix' from this profile (not including
+  /// children).
+  void GetLocalCountersWithSuffix(
+      const std::string& suffix, std::vector<Counter*>* counters) const;
+
   /// Recursively compute the fraction of the 'total_time' spent in this profile and
   /// its children. This function updates local_time_frac_ for each profile.
   void ComputeTimeInProfile();

@@ -28,6 +28,7 @@
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/join.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/bind.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <rapidjson/prettywriter.h>
@@ -71,6 +72,7 @@ DEFINE_uint64_hidden(json_profile_event_timestamp_limit, 5,
     " within the respective plan node's profile. If N <= M or M = 0,"
     " the actual timestamp values are grouped without aggregation.");
 
+using boost::algorithm::ends_with;
 using boost::algorithm::to_lower_copy;
 using namespace rapidjson;
 
@@ -1255,6 +1257,17 @@ void RuntimeProfileBase::GetCounters(const string& name, vector<Counter*>* count
   lock_guard<SpinLock> l(children_lock_);
   for (int i = 0; i < children_.size(); ++i) {
     children_[i].first->GetCounters(name, counters);
+  }
+}
+
+void RuntimeProfileBase::GetLocalCountersWithSuffix(
+    const string& suffix, vector<Counter*>* counters) const {
+  DCHECK(counters != nullptr);
+  lock_guard<SpinLock> l(counter_map_lock_);
+  for (const auto& entry : counter_map_) {
+    if (ends_with(entry.first, suffix)) {
+      counters->push_back(entry.second);
+    }
   }
 }
 
