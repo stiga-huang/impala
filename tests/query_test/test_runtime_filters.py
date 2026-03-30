@@ -451,6 +451,7 @@ class TestRuntimeRowFilterReservation(ImpalaTestSuite):
 
   def test_row_filter_reservation(self, vector):
     """Test handling of runtime filter memory reservations. Tuned for mt_dop=0."""
+    vector.get_value('exec_option')['use_historical_stats'] = 0
     self.run_test_case('QueryTest/runtime_row_filter_reservations', vector,
                        test_file_vars=DEFAULT_VARS)
 

@@ -63,6 +63,7 @@ class TestExplain(ImpalaTestSuite):
   def test_explain_level2(self, vector):
     vector.get_value('exec_option')['num_scanner_threads'] = self.NUM_SCANNER_THREADS
     vector.get_value('exec_option')['explain_level'] = 2
+    vector.get_value('exec_option')['use_historical_stats'] = 0
     self.run_test_case('QueryTest/explain-level2', vector)
 
   @SkipIfNotHdfsMinicluster.plans
@@ -70,6 +71,7 @@ class TestExplain(ImpalaTestSuite):
   def test_explain_level3(self, vector):
     vector.get_value('exec_option')['num_scanner_threads'] = self.NUM_SCANNER_THREADS
     vector.get_value('exec_option')['explain_level'] = 3
+    vector.get_value('exec_option')['use_historical_stats'] = 0
     self.run_test_case('QueryTest/explain-level3', vector)
 
   @staticmethod
@@ -94,6 +96,7 @@ class TestExplain(ImpalaTestSuite):
     # TODO Remove this test
     db_name = 'functional'
     tbl_name = 'alltypes'
+    options = {'explain_level': 3, 'use_historical_stats': 0}
 
     def check_cardinality(query_result, expected_cardinality):
       self.check_row_size_and_cardinality(
@@ -101,17 +104,17 @@ class TestExplain(ImpalaTestSuite):
 
     # All partitions are filtered out, cardinality should be 0.
     result = self.execute_query("explain select * from %s.%s where year = 1900" % (
-        db_name, tbl_name), query_options={'explain_level': 3})
+        db_name, tbl_name), query_options=options)
     check_cardinality(result.data, '0')
 
     # Half of the partitions are filtered out, cardinality should be 3650.
     result = self.execute_query("explain select * from %s.%s where year = 2010" % (
-        db_name, tbl_name), query_options={'explain_level': 3})
+        db_name, tbl_name), query_options=options)
     check_cardinality(result.data, '3.65K')
 
     # None of the partitions are filtered out, cardinality should be 7300.
     result = self.execute_query("explain select * from %s.%s" % (db_name, tbl_name),
-        query_options={'explain_level': 3})
+        query_options=options)
     check_cardinality(result.data, '7.30K')
 
     # Create a partitioned table with a mixed set of available stats,
@@ -125,11 +128,11 @@ class TestExplain(ImpalaTestSuite):
       "alter table %s set tblproperties('numRows'='100')" % mixed_tbl)
     # Should fall back to table-level cardinality when partitions lack stats.
     result = self.execute_query("explain select * from %s" % mixed_tbl,
-        query_options={'explain_level': 3})
+        query_options=options)
     check_cardinality(result.data, '100')
     # Should fall back to table-level cardinality, even for a subset of partitions,
     result = self.execute_query("explain select * from %s where p = 1" % mixed_tbl,
-        query_options={'explain_level': 3})
+        query_options=options)
     check_cardinality(result.data, '100')
     # Set the number of rows at the table level to -1.
     self.execute_query(
@@ -140,14 +143,14 @@ class TestExplain(ImpalaTestSuite):
     # Use partition stats when availabe. Row counts for partitions without
     # stats are estimated.
     result = self.execute_query("explain select * from %s" % mixed_tbl,
-        query_options={'explain_level': 3})
+        query_options=options)
     check_cardinality(result.data, '51')
     # Set the number of rows at the table level back to 100.
     self.execute_query(
       "alter table %s set tblproperties('numRows'='100')" % mixed_tbl)
     # Fall back to table-level stats when no selected partitions have stats.
     result = self.execute_query("explain select * from %s where p = 2" % mixed_tbl,
-        query_options={'explain_level': 3})
+        query_options=options)
     check_cardinality(result.data, '100')
 
   def test_explain_row_size_estimates(self, unique_database):

@@ -1021,6 +1021,7 @@ class TestObservability(ImpalaTestSuite):
         where l1.o_custkey < 1000"""
     with self.create_impala_client() as client:
       client.set_configuration_option('compute_processing_cost', 1)
+      client.set_configuration_option('use_historical_stats', 0)
       result = client.execute(query, fetch_exec_summary=True)
       scan = result.exec_summary[10]
       assert '00:SCAN' in scan['operator']

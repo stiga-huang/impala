@@ -2268,6 +2268,7 @@ class TestIcebergV2Table(IcebergTestSuite):
     assert "partitions=2/unknown" in selective_time_travel_data.runtime_profile
 
   def test_partition_key_scans(self, vector, unique_database):
+    vector.get_value('exec_option')['use_historical_stats'] = 0
     self.run_test_case('QueryTest/iceberg-partition-key-scans', vector, unique_database)
 
   def test_table_repair(self, unique_database):

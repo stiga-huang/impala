@@ -1053,7 +1053,8 @@ class TestExecutorGroups(CustomClusterTestSuite):
     # restored to this default values.
     self._set_query_options({
       'COMPUTE_PROCESSING_COST': 'true',
-      'SLOT_COUNT_STRATEGY': 'PLANNER_CPU_ASK'})
+      'SLOT_COUNT_STRATEGY': 'PLANNER_CPU_ASK',
+      'USE_HISTORICAL_STATS': 0})
 
     # Expect to run the query on the tiny group by default.
     self._run_query_and_verify_profile(CPU_TEST_QUERY,
