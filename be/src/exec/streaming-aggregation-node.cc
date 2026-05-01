@@ -85,7 +85,6 @@ Status StreamingAggregationNode::GetNext(
   }
 
   IncrementNumRowsReturned(row_batch->num_rows());
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

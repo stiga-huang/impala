@@ -331,7 +331,6 @@ Status GroupingAggregator::GetRowsFromPartition(
     }
   }
 
-  COUNTER_SET(rows_returned_counter_, num_rows_returned_);
   partition_eos_ = ReachedLimit();
   if (partition_eos_ || output_iterator_.AtEnd()) {
     // Clean up the remaining entries of the hash table before releasing the memory.

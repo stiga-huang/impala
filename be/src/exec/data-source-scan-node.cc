@@ -506,7 +506,6 @@ Status DataSourceScanNode::GetNext(RuntimeState* state, RowBatch* row_batch, boo
       if (row_batch->AtCapacity() || ReachedLimit()
           || (input_batch_->eos && !InputBatchHasNext())) {
         *eos = (input_batch_->eos && !InputBatchHasNext()) || ReachedLimit();
-        COUNTER_SET(rows_returned_counter_, rows_returned());
         COUNTER_ADD(rows_read_counter_, rows_read);
         return Status::OK();
       }

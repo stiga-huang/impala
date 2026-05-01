@@ -342,7 +342,6 @@ Status UnionNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
   *eos = ReachedLimit() ||
       (!HasMorePassthrough() && !HasMoreMaterialized() && !HasMoreConst(state));
 
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

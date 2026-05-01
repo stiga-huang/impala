@@ -101,7 +101,6 @@ void NonGroupingAggregator::GetSingletonOutput(RowBatch* row_batch) {
   if (ExecNode::EvalConjuncts(conjunct_evals_.data(), conjunct_evals_.size(), row)) {
     row_batch->CommitLastRow();
     ++num_rows_returned_;
-    COUNTER_SET(rows_returned_counter_, num_rows_returned_);
   }
   // Keep the current chunk to amortize the memory allocation over a series
   // of Reset()/Open()/GetNext()* calls.

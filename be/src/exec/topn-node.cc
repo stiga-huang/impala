@@ -413,7 +413,6 @@ Status TopNNode::GetNextUnpartitioned(
   // inside a subplan, we might choose to only selectively transfer, e.g., when the
   // block(s) in the pool are all full or when the pool has reached a certain size.
   if (*eos) row_batch->tuple_data_pool()->AcquireData(tuple_pool_.get(), false);
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 
@@ -491,7 +490,6 @@ Status TopNNode::GetNextPartitioned(
     tuple_pool_->FreeAll();
     tuple_pool_ = move(temp_pool);
   }
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

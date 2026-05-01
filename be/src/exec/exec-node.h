@@ -493,7 +493,16 @@ class ExecNode {
   /// TODO: IMPALA-2399: replace QueryMaintenance() - see JIRA for more details.
   Status QueryMaintenance(RuntimeState* state) WARN_UNUSED_RESULT;
 
-  /// Sets the number of rows returned.
+  /// Reset the number of rows returned for the current (subplan) iteration. The count so
+  /// far is banked into 'rows_returned_accumulated_' so the derived 'RowsReturned'
+  /// counter keeps reporting the lifetime total across resets.
+  void ResetNumRowsReturned() {
+    rows_returned_accumulated_ += num_rows_returned_;
+    num_rows_returned_ = 0;
+  }
+
+  /// Sets the number of rows returned. The 'RowsReturned' profile counter is derived and
+  /// updated automatically.
   void SetNumRowsReturned(int64_t value) {
     DCHECK(getExecutionModel() != NON_TASK_BASED_SYNC);
     num_rows_returned_ = value;
@@ -550,6 +559,11 @@ class ExecNode {
   /// MT scan nodes (HdfsScanNodeMt/KuduScanNodeMt) and regular scan nodes
   /// (HdfsScanNode/KuduScanNode) call common scanner functions.
   int64_t num_rows_returned_;
+
+  /// Rows returned in previous (subplan) iterations, banked by ResetNumRowsReturned() so
+  /// the derived 'RowsReturned' counter reports the lifetime total. Only mutated on the
+  /// main execution thread, between iterations.
+  int64_t rows_returned_accumulated_ = 0;
   DFAKE_MUTEX(single_thread_check_);
   /// Implementation of ExecDebugAction(). This is the slow path we take when there is
   /// actually a debug action enabled for 'phase'.

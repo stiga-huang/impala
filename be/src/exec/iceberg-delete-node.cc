@@ -278,7 +278,6 @@ Status IcebergDeleteNode::GetNext(RuntimeState* state, RowBatch* out_batch, bool
   }
 
   IncrementNumRowsReturned(num_rows_added);
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

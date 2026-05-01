@@ -178,7 +178,6 @@ Status IcebergMergeNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool*
       RETURN_IF_ERROR(child(0)->GetNext(state, child_row_batch_.get(), &child_eos_));
     }
     RETURN_IF_ERROR(EvaluateCases(row_batch));
-    COUNTER_SET(rows_returned_counter_, rows_returned());
     *eos =
         ReachedLimit() || (child_row_idx_ == child_row_batch_->num_rows() && child_eos_);
     if (*eos || child_row_idx_ == child_row_batch_->num_rows()) {

@@ -97,7 +97,6 @@ Status CardinalityCheckNode::GetNext(
     output_row_batch->CommitLastRow();
     row_batch_->TransferResourceOwnership(output_row_batch);
     SetNumRowsReturned(1);
-    COUNTER_SET(rows_returned_counter_, rows_returned());
   }
   *eos = true;
   row_batch_->Reset();

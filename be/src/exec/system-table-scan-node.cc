@@ -84,7 +84,6 @@ Status SystemTableScanNode::GetNext(RuntimeState* state, RowBatch* row_batch, bo
       IncrementNumRowsReturned(1);
     }
   }
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   *eos = ReachedLimit() || scanner_->eos();
   return Status::OK();
 }

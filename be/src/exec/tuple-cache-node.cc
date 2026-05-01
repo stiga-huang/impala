@@ -380,7 +380,6 @@ Status TupleCacheNode::GetNext(
     debug_dump_text_writer_ref_->Commit();
     RETURN_IF_ERROR(VerifyAndMoveDebugCache(state));
   }
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

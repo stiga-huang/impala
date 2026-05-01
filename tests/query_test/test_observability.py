@@ -74,6 +74,37 @@ class TestObservability(ImpalaTestSuite):
     assert exchange['est_num_rows'] == 25
     assert exchange['peak_mem'] > 0
 
+  def test_subplan_num_rows(self):
+    """Regression test for IMPALA-14941 - checks that the exec summary reports a
+    non-zero #Rows for a SUBPLAN and its child operators (e.g. UNNEST). Their
+    per-iteration row count is reset on every subplan iteration, so #Rows used to be
+    reported as 0 even though the query returned the correct rows."""
+    query = """
+        select c.c_custkey, arr.o_orderkey
+        from tpch_nested_parquet.customer c, c.c_orders arr
+        where c.c_custkey <= 10"""
+    # Use a single fragment instance so each operator's #Rows in the exec summary is
+    # its count on that instance (see test_cancelled_nodes_in_exec_summary).
+    self.client.set_configuration_option("num_nodes", 1)
+    try:
+      result = self.client.execute(query, fetch_exec_summary=True)
+    finally:
+      self.client.clear_configuration()
+
+    def get_operator(suffix):
+      matches = [row for row in result.exec_summary
+                 if row['operator'].endswith(suffix)]
+      assert len(matches) == 1, \
+          "expected exactly one '%s' operator: %s" % (suffix, result.runtime_profile)
+      return matches[0]
+
+    # UNNEST emits one row per array element, the SUBPLAN passes each through, and the
+    # query returns one row per element, so all three counts are equal and non-zero.
+    num_result_rows = len(result.data)
+    assert num_result_rows > 0
+    assert get_operator('SUBPLAN')['num_rows'] == num_result_rows, result.runtime_profile
+    assert get_operator('UNNEST')['num_rows'] == num_result_rows, result.runtime_profile
+
   def test_report_time(self):
     """ Regression test for IMPALA-6741 - checks that last reporting time exists in
     profiles of fragment instances."""

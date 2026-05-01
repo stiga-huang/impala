@@ -123,7 +123,6 @@ Status HdfsScanNodeMt::GetNext(RuntimeState* state, RowBatch* row_batch, bool* e
     scan_range_ = nullptr;
     return Status::OK();
   }
-  COUNTER_SET(rows_returned_counter_, rows_returned());
 
   if (*eos) StopAndFinalizeCounters();
   return Status::OK();

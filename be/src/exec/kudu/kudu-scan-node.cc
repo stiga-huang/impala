@@ -109,7 +109,6 @@ Status KuduScanNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos
     if (CheckLimitAndTruncateRowBatchIfNeededShared(row_batch, eos)) {
       SetDone();
     }
-    COUNTER_SET(rows_returned_counter_, rows_returned_shared());
     materialized_batch.reset();
   } else {
     *eos = true;

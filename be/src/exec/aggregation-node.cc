@@ -139,7 +139,6 @@ Status AggregationNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* 
 
   *eos = ReachedLimit() || (pagg_eos && curr_output_agg_idx_ >= aggs_.size());
   IncrementNumRowsReturned(row_batch->num_rows());
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

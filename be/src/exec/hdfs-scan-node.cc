@@ -141,7 +141,6 @@ Status HdfsScanNode::GetNextInternal(
     // Note that the scanner threads may have processed and queued up extra rows before
     // this thread incremented the rows returned.
     if (CheckLimitAndTruncateRowBatchIfNeededShared(row_batch, eos)) SetDone();
-    COUNTER_SET(rows_returned_counter_, rows_returned_shared());
     materialized_batch.reset();
     return Status::OK();
   }

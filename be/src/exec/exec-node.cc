@@ -324,7 +324,14 @@ Status ExecNode::Prepare(RuntimeState* state) {
   expr_mem_tracker_.reset(new MemTracker(-1, "Exprs", mem_tracker_.get(), false));
   expr_perm_pool_.reset(new MemPool(expr_mem_tracker_.get()));
   expr_results_pool_.reset(new MemPool(expr_mem_tracker_.get()));
-  rows_returned_counter_ = ADD_COUNTER(runtime_profile_, "RowsReturned", TUnit::UNIT);
+  // 'RowsReturned' is derived from the lifetime row count so it stays correct for nodes
+  // under a subplan (whose 'num_rows_returned_' is reset every iteration and banked into
+  // 'rows_returned_accumulated_'). Deriving it also avoids updating a counter per row.
+  rows_returned_counter_ = runtime_profile_->AddDerivedCounter(
+      "RowsReturned", TUnit::UNIT, [this]() {
+        return rows_returned_accumulated_
+            + base::subtle::Acquire_Load(&num_rows_returned_);
+      });
   rows_returned_rate_ = runtime_profile()->AddDerivedCounter(
       ROW_THROUGHPUT_COUNTER, TUnit::UNIT_PER_SECOND,
       std::bind<int64_t>(&RuntimeProfile::UnitsPerSecond, rows_returned_counter_,
@@ -353,7 +360,7 @@ Status ExecNode::Open(RuntimeState* state) {
 }
 
 Status ExecNode::Reset(RuntimeState* state, RowBatch* row_batch) {
-  num_rows_returned_ = 0;
+  ResetNumRowsReturned();
   for (int i = 0; i < children_.size(); ++i) {
     RETURN_IF_ERROR(children_[i]->Reset(state, row_batch));
   }
@@ -364,9 +371,6 @@ void ExecNode::Close(RuntimeState* state) {
   if (is_closed_) return;
   is_closed_ = true;
 
-  if (rows_returned_counter_ != NULL) {
-    COUNTER_SET(rows_returned_counter_, num_rows_returned_);
-  }
   for (int i = 0; i < children_.size(); ++i) {
     children_[i]->Close(state);
   }

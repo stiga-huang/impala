@@ -696,7 +696,6 @@ Status PartitionedHashJoinNode::GetNext(
   }
 
   IncrementNumRowsReturned(num_rows_added);
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

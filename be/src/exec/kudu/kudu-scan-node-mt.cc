@@ -89,7 +89,6 @@ Status KuduScanNodeMt::GetNext(RuntimeState* state, RowBatch* row_batch, bool* e
     scanner_->Close();
     scanner_.reset();
   }
-  COUNTER_SET(rows_returned_counter_, rows_returned());
 
   return Status::OK();
 }

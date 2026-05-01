@@ -115,7 +115,10 @@ Status Aggregator::Prepare(RuntimeState* state) {
       expr_perm_pool_.get(), expr_results_pool_.get(), &conjunct_evals_));
   DCHECK_EQ(conjunct_evals_.size(), conjuncts_.size());
 
-  rows_returned_counter_ = ADD_COUNTER(runtime_profile_, "RowsReturned", TUnit::UNIT);
+  // Derived from 'num_rows_returned_', which the aggregator never resets, so it needs
+  // no accumulator and is not updated per row.
+  rows_returned_counter_ = runtime_profile_->AddDerivedCounter(
+      "RowsReturned", TUnit::UNIT, [this]() { return num_rows_returned_; });
   build_timer_ = ADD_TIMER(runtime_profile(), "BuildTime");
 
   return Status::OK();

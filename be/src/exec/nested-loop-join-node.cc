@@ -296,7 +296,6 @@ end:
       }
     }
   }
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

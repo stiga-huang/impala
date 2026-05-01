@@ -84,7 +84,6 @@ Status SequenceNode::GetNext(
   int num_rows_added = output_row_batch->num_rows() - num_rows_before;
   DCHECK_GE(num_rows_added, 0);
   IncrementNumRowsReturned(num_rows_added);
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

@@ -189,8 +189,6 @@ Status SortNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) {
   returned_buffer_ = row_batch->num_buffers() > 0;
   CheckLimitAndTruncateRowBatchIfNeeded(row_batch, eos);
 
-  COUNTER_SET(rows_returned_counter_, rows_returned());
-
   return Status::OK();
 }
 

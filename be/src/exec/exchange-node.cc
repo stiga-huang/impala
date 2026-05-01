@@ -217,7 +217,6 @@ Status ExchangeNode::GetNext(RuntimeState* state, RowBatch* output_batch, bool* 
           next_row_idx_ += rows_to_copy;
           output_batch->CommitRows(rows_to_copy);
           IncrementNumRowsReturned(rows_to_copy);
-          COUNTER_SET(rows_returned_counter_, rows_returned());
         }
       }
 
@@ -271,7 +270,6 @@ Status ExchangeNode::GetNextMerging(RuntimeState* state, RowBatch* output_batch,
   // the senders' fragments can exit early.
   if (*eos) ReleaseRecvrResources(output_batch);
 
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 

@@ -209,7 +209,6 @@ Status UnnestNode::GetNext(RuntimeState* state, RowBatch* row_batch, bool* eos) 
   // Checking the limit here is simpler/cheaper than doing it in the loop above.
   const bool reached_limit = CheckLimitAndTruncateRowBatchIfNeeded(row_batch, eos);
   if (!reached_limit && item_idx_ == longest_collection_size_) *eos = true;
-  COUNTER_SET(rows_returned_counter_, rows_returned());
   return Status::OK();
 }
 
