@@ -541,4 +541,502 @@ public class HboKeyStringTest extends FrontendTestBase {
     assertEquals(unionKey, union.generateHboKeyString(
         THboStatsType.CARDINALITY, CanonicalizationStrategy.EXPR_REWRITE));
   }
+
+  /** Counts the number of JoinNodes in the plan node map. */
+  private int countJoinNodes(Map<Integer, PlanNode> planNodes) {
+    int count = 0;
+    for (PlanNode n : planNodes.values()) {
+      if (n instanceof JoinNode) count++;
+    }
+    return count;
+  }
+
+  private JoinNode singleJoin(String query) throws ImpalaException {
+    Map<Integer, PlanNode> nodes = collectPlanNodesInDistributedPlan(query);
+    assertEquals("Expected exactly one JoinNode for query: " + query, 1,
+        countJoinNodes(nodes));
+    for (PlanNode n : nodes.values()) {
+      if (n instanceof JoinNode) return (JoinNode) n;
+    }
+    return null;
+  }
+
+  /**
+   * Plans {@code query}, asserts it has exactly one JoinNode, and checks the
+   * JoinNode's HBO key string against the expected values for both
+   * canonicalization strategies.
+   */
+  private void verifySingleJoinKey(String query, String expectedExprRewrite,
+      String expectedIgnorePartConsts) throws ImpalaException {
+    JoinNode join = singleJoin(query);
+    assertEquals(expectedExprRewrite, join.generateHboKeyString(
+        THboStatsType.CARDINALITY, CanonicalizationStrategy.EXPR_REWRITE));
+    assertEquals(expectedIgnorePartConsts, join.generateHboKeyString(
+        THboStatsType.CARDINALITY,
+        CanonicalizationStrategy.IGNORE_PARTITION_CONSTANTS));
+  }
+
+  @Test
+  public void testInnerJoinGroupKeyIsOrderIndependent() throws ImpalaException {
+    // STRAIGHT_JOIN preserves FROM-clause order so the planner builds two different join
+    // trees. The HBO key for the top join must be identical between the two queries
+    // because the inner-join group flattens both trees into the same set of operands and
+    // predicates.
+    String filters = "where a.year=2009 and b.year=2009 and c.year=2009 "
+        + "and a.int_col=0 and b.int_col=0 and c.int_col=0";
+    String q1 = "select STRAIGHT_JOIN count(*) from functional.alltypes c "
+        + "join functional.alltypessmall b on c.id = b.id "
+        + "join functional.alltypestiny a on b.id = a.id " + filters;
+    String q2 = "select STRAIGHT_JOIN count(*) from functional.alltypestiny a "
+        + "join functional.alltypessmall b on a.id = b.id "
+        + "join functional.alltypes c on b.id = c.id " + filters;
+
+    // Plan IDs confirmed from EXPLAIN: scans 0/1/2, bottom join 3, top join 4.
+    final int BOTTOM_JOIN_ID = 3;
+    final int TOP_JOIN_ID = 4;
+
+    Map<Integer, PlanNode> q1Nodes = collectPlanNodesInDistributedPlan(q1);
+    Map<Integer, PlanNode> q2Nodes = collectPlanNodesInDistributedPlan(q2);
+
+    // Scan keys in ExprRewrite (ER) and IgnorePartitionConstants (IPC) strategies.
+    String scanAllER =
+        "CARDINALITY:ScanNode:functional.alltypes|`year` = 2009|int_col = 0|";
+    String scanSmallER =
+        "CARDINALITY:ScanNode:functional.alltypessmall|`year` = 2009|int_col = 0|";
+    String scanTinyER =
+        "CARDINALITY:ScanNode:functional.alltypestiny|`year` = 2009|int_col = 0|";
+    String scanAllIPC =
+        "CARDINALITY:ScanNode:functional.alltypes|`year`=<CONST>|int_col = 0|";
+    String scanSmallIPC =
+        "CARDINALITY:ScanNode:functional.alltypessmall|`year`=<CONST>|int_col = 0|";
+    String scanTinyIPC =
+        "CARDINALITY:ScanNode:functional.alltypestiny|`year`=<CONST>|int_col = 0|";
+
+    // OPERANDS are sorted by scan table name (functional.alltypes <
+    // functional.alltypessmall < functional.alltypestiny), and join-predicate columns are
+    // qualified with their operand's index in that sorted list ("op<idx>").
+    // q1 bottom join (alltypes, alltypessmall): operand 0 = all, operand 1 = small.
+    // q2 bottom join (alltypestiny, alltypessmall): operand 0 = small, operand 1 = tiny.
+    String expectedQ1BottomER = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + scanAllER + "," + scanSmallER + "]|PREDS:[op0.id=op1.id]";
+    String expectedQ2BottomER = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + scanSmallER + "," + scanTinyER + "]|PREDS:[op0.id=op1.id]";
+    // Top join operands sorted: 0 = all, 1 = small, 2 = tiny. Edges all-small and
+    // small-tiny render as op0.id=op1.id and op1.id=op2.id (then sorted).
+    String expectedTopER = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + scanAllER + "," + scanSmallER + "," + scanTinyER
+        + "]|PREDS:[op0.id=op1.id,op1.id=op2.id]";
+
+    String expectedQ1BottomIPC = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + scanAllIPC + "," + scanSmallIPC + "]|PREDS:[op0.id=op1.id]";
+    String expectedQ2BottomIPC = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + scanSmallIPC + "," + scanTinyIPC + "]|PREDS:[op0.id=op1.id]";
+    String expectedTopIPC = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + scanAllIPC + "," + scanSmallIPC + "," + scanTinyIPC
+        + "]|PREDS:[op0.id=op1.id,op1.id=op2.id]";
+
+    // q1 bottom join is (alltypes, alltypessmall).
+    JoinNode q1Bottom = (JoinNode) q1Nodes.get(BOTTOM_JOIN_ID);
+    JoinNode q1Top = (JoinNode) q1Nodes.get(TOP_JOIN_ID);
+    assertEquals(expectedQ1BottomER, q1Bottom.generateHboKeyString(
+        THboStatsType.CARDINALITY, CanonicalizationStrategy.EXPR_REWRITE));
+    assertEquals(expectedQ1BottomIPC, q1Bottom.generateHboKeyString(
+        THboStatsType.CARDINALITY,
+        CanonicalizationStrategy.IGNORE_PARTITION_CONSTANTS));
+    assertEquals(expectedTopER, q1Top.generateHboKeyString(
+        THboStatsType.CARDINALITY, CanonicalizationStrategy.EXPR_REWRITE));
+    assertEquals(expectedTopIPC, q1Top.generateHboKeyString(
+        THboStatsType.CARDINALITY,
+        CanonicalizationStrategy.IGNORE_PARTITION_CONSTANTS));
+
+    // q2 bottom join is (alltypestiny, alltypessmall).
+    JoinNode q2Bottom = (JoinNode) q2Nodes.get(BOTTOM_JOIN_ID);
+    JoinNode q2Top = (JoinNode) q2Nodes.get(TOP_JOIN_ID);
+    assertEquals(expectedQ2BottomER, q2Bottom.generateHboKeyString(
+        THboStatsType.CARDINALITY, CanonicalizationStrategy.EXPR_REWRITE));
+    assertEquals(expectedQ2BottomIPC, q2Bottom.generateHboKeyString(
+        THboStatsType.CARDINALITY,
+        CanonicalizationStrategy.IGNORE_PARTITION_CONSTANTS));
+    assertEquals(expectedTopER, q2Top.generateHboKeyString(
+        THboStatsType.CARDINALITY, CanonicalizationStrategy.EXPR_REWRITE));
+    assertEquals(expectedTopIPC, q2Top.generateHboKeyString(
+        THboStatsType.CARDINALITY,
+        CanonicalizationStrategy.IGNORE_PARTITION_CONSTANTS));
+
+    // Compare keys of two queries.
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      assertNotEquals(
+          "Bottom join keys must differ between FROM-clause orderings for "
+              + strategy,
+          q1Bottom.generateHboKeyString(THboStatsType.CARDINALITY, strategy),
+          q2Bottom.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertEquals(
+          "Top join keys must match between FROM-clause orderings for " + strategy,
+          q1Top.generateHboKeyString(THboStatsType.CARDINALITY, strategy),
+          q2Top.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+    }
+  }
+
+  @Test
+  public void testJoinOperandAlias() throws ImpalaException {
+    // Two joins of the same two tables on the same columns but with the column-to-table
+    // assignment (alias) swapped must NOT produce the same key.
+    String q1 = "select count(*) from functional.alltypes a "
+        + "join functional.alltypestiny b on a.id = b.int_col";
+    String q2 = "select count(*) from functional.alltypestiny a "
+        + "join functional.alltypes b on a.id = b.int_col";
+
+    JoinNode join1 = singleJoin(q1);
+    JoinNode join2 = singleJoin(q2);
+
+    // OPERANDS sorted by table name: alltypes is operand 0 and alltypestiny is operand 1.
+    String scanAll = "CARDINALITY:ScanNode:functional.alltypes|";
+    String scanTiny = "CARDINALITY:ScanNode:functional.alltypestiny|";
+    String operands = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + scanAll + "," + scanTiny + "]|";
+    // q1: a.id (alltypes.id) = b.int_col (alltypestiny.int_col) -> op0.id=op1.int_col
+    String expectedQ1 = operands + "PREDS:[op0.id=op1.int_col]";
+    // q2: a.id (alltypestiny.id) = b.int_col (alltypes.int_col) -> op0.int_col=op1.id
+    String expectedQ2 = operands + "PREDS:[op0.int_col=op1.id]";
+
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      assertEquals(expectedQ1,
+          join1.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertEquals(expectedQ2,
+          join2.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+    }
+  }
+
+  @Test
+  public void testRightHandedJoins() throws ImpalaException {
+    // Right-handed joins (RIGHT_ANTI / RIGHT_SEMI / RIGHT_OUTER) must produce
+    // the same HBO key as their LEFT-handed counterparts.
+    String semiAntiFilters = "where a.year=2009 and a.int_col=0";
+    String outerFilters =
+        "where a.year=2009 and b.year=2009 and a.int_col=0 and b.int_col=0";
+    String leftAntiQuery = "select count(*) from functional_parquet.alltypes a "
+        + "left anti join functional.alltypes b on a.id = b.id " + semiAntiFilters;
+    String rightAntiQuery = "select count(*) from functional.alltypes b "
+        + "right anti join functional_parquet.alltypes a on b.id = a.id "
+        + semiAntiFilters;
+    String leftSemiQuery = "select count(*) from functional_parquet.alltypes a "
+        + "left semi join functional.alltypes b on a.id = b.id " + semiAntiFilters;
+    String rightSemiQuery = "select count(*) from functional.alltypes b "
+        + "right semi join functional_parquet.alltypes a on b.id = a.id "
+        + semiAntiFilters;
+    String leftOuterQuery = "select count(*) from functional_parquet.alltypes a "
+        + "left outer join functional.alltypes b on a.id = b.id " + outerFilters;
+    String rightOuterQuery = "select count(*) from functional.alltypes b "
+        + "right outer join functional_parquet.alltypes a on b.id = a.id "
+        + outerFilters;
+
+    String parquetScanER = "CARDINALITY:ScanNode:functional_parquet.alltypes|"
+        + "`year` = 2009|int_col = 0|";
+    String parquetScanIPC = "CARDINALITY:ScanNode:functional_parquet.alltypes|"
+        + "`year`=<CONST>|int_col = 0|";
+    String plainScanEmpty = "CARDINALITY:ScanNode:functional.alltypes|";
+    String plainScanWithPredsER =
+        "CARDINALITY:ScanNode:functional.alltypes|`year` = 2009|int_col = 0|";
+    String plainScanWithPredsIPC =
+        "CARDINALITY:ScanNode:functional.alltypes|`year`=<CONST>|int_col = 0|";
+
+    // Anti
+    String exprRewriteKey = "CARDINALITY:JoinNode:LEFT_ANTI_JOIN|EQ:op0.id=op1.id|"
+        + "LEFT:" + parquetScanER + "|RIGHT:" + plainScanEmpty + "|";
+    String ignorePartConstsKey = "CARDINALITY:JoinNode:LEFT_ANTI_JOIN|EQ:op0.id=op1.id|"
+        + "LEFT:" + parquetScanIPC + "|RIGHT:" + plainScanEmpty + "|";
+    verifySingleJoinKey(leftAntiQuery, exprRewriteKey, ignorePartConstsKey);
+    verifySingleJoinKey(rightAntiQuery, exprRewriteKey, ignorePartConstsKey);
+
+    // Semi
+    exprRewriteKey = "CARDINALITY:JoinNode:LEFT_SEMI_JOIN|EQ:op0.id=op1.id|"
+        + "LEFT:" + parquetScanER + "|RIGHT:" + plainScanEmpty + "|";
+    ignorePartConstsKey = "CARDINALITY:JoinNode:LEFT_SEMI_JOIN|EQ:op0.id=op1.id|"
+        + "LEFT:" + parquetScanIPC + "|RIGHT:" + plainScanEmpty + "|";
+    verifySingleJoinKey(leftSemiQuery, exprRewriteKey, ignorePartConstsKey);
+    verifySingleJoinKey(rightSemiQuery, exprRewriteKey, ignorePartConstsKey);
+
+    // Outer: outer joins keep their preserved side's WHERE predicates as
+    // conjuncts_ on the join (rendered as WHERE: in the key) because pushing
+    // them below the join would change semantics. The two scans here both have
+    // their predicates pushed down, but b's predicates stay on the join in leftOuter
+    // (and equivalently on rightOuter after inversion) and are canonicalized with op1.
+    String outerWhereER = "WHERE:op1.`year` = 2009,op1.int_col = 0|";
+    String outerWhereIPC = "WHERE:op1.`year`=<CONST>,op1.int_col = 0|";
+    exprRewriteKey = "CARDINALITY:JoinNode:LEFT_OUTER_JOIN|EQ:op0.id=op1.id|"
+        + outerWhereER + "LEFT:" + parquetScanER + "|RIGHT:" + plainScanWithPredsER + "|";
+    ignorePartConstsKey = "CARDINALITY:JoinNode:LEFT_OUTER_JOIN|EQ:op0.id=op1.id|"
+        + outerWhereIPC + "LEFT:" + parquetScanIPC + "|RIGHT:" + plainScanWithPredsIPC
+        + "|";
+    verifySingleJoinKey(leftOuterQuery, exprRewriteKey, ignorePartConstsKey);
+    verifySingleJoinKey(rightOuterQuery, exprRewriteKey, ignorePartConstsKey);
+  }
+
+  @Test
+  public void testCrossJoin() throws ImpalaException {
+    // CROSS JOIN is a special case of INNER JOIN that the join condition is always true.
+    // So the key prefix is "JoinGroup:INNER" and the PREDS list is empty.
+    String query = "select count(*) from functional.alltypes a "
+        + "cross join functional.alltypestiny b where a.year=2009";
+    JoinNode join = singleJoin(query);
+    // Keys for ExprRewrite strategy.
+    String alltypesScanER =
+        "CARDINALITY:ScanNode:functional.alltypes|`year` = 2009|";
+    String alltypesTinyScanER = "CARDINALITY:ScanNode:functional.alltypestiny|";
+    // OPERANDS sorted by scan table name: alltypes < alltypestiny.
+    String expectedER = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + alltypesScanER + "," + alltypesTinyScanER + "]|PREDS:[]";
+    assertEquals(expectedER, join.generateHboKeyString(
+        THboStatsType.CARDINALITY, CanonicalizationStrategy.EXPR_REWRITE));
+    // Keys for IgnorePartitionConstants strategy.
+    String alltypesScanIPC =
+        "CARDINALITY:ScanNode:functional.alltypes|`year`=<CONST>|";
+    String expectedIPC = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + alltypesScanIPC + "," + alltypesTinyScanER + "]|PREDS:[]";
+    assertEquals(expectedIPC, join.generateHboKeyString(
+        THboStatsType.CARDINALITY,
+        CanonicalizationStrategy.IGNORE_PARTITION_CONSTANTS));
+  }
+
+  @Test
+  public void testFullOuterJoin() throws ImpalaException {
+    // Full outer joins sort child keys so that "FROM a FULL OUTER JOIN b" and
+    // "FROM b FULL OUTER JOIN a" produce the same HBO key.
+    String q1 = "select count(*) from functional_parquet.alltypes a "
+        + "full outer join functional.alltypes b on a.id = b.id";
+    String q2 = "select count(*) from functional.alltypes b "
+        + "full outer join functional_parquet.alltypes a on a.id = b.id";
+    JoinNode join1 = singleJoin(q1);
+    JoinNode join2 = singleJoin(q2);
+
+    String plainScan = "CARDINALITY:ScanNode:functional.alltypes|";
+    String parquetScan = "CARDINALITY:ScanNode:functional_parquet.alltypes|";
+    String expectedER = "CARDINALITY:JoinNode:FULL_OUTER_JOIN|EQ:op0.id=op1.id|"
+        + "LEFT:" + plainScan + "|RIGHT:" + parquetScan + "|";
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      assertEquals(expectedER, join1.generateHboKeyString(
+          THboStatsType.CARDINALITY, strategy));
+      assertEquals(expectedER, join2.generateHboKeyString(
+          THboStatsType.CARDINALITY, strategy));
+    }
+  }
+
+  @Test
+  public void testOtherJoinConjuncts() throws ImpalaException {
+    // Non-equi ON-clause predicates become otherJoinConjuncts_ and appear in
+    // the key as a separate OTHER: section between EQ: and WHERE:.
+    String query = "select count(*) from functional.alltypes a "
+        + "left outer join functional.alltypes b "
+        + "on a.id = b.id and a.int_col != b.int_col "
+        + "where a.year=2009 and b.year=2010";
+    JoinNode join = singleJoin(query);
+
+    String leftScanER = "CARDINALITY:ScanNode:functional.alltypes|`year` = 2009|";
+    String leftScanIPC = "CARDINALITY:ScanNode:functional.alltypes|`year`=<CONST>|";
+    String rightScanER = "CARDINALITY:ScanNode:functional.alltypes|`year` = 2010|";
+    String rightScanIPC = "CARDINALITY:ScanNode:functional.alltypes|`year`=<CONST>|";
+    String keyFmt = "CARDINALITY:JoinNode:LEFT_OUTER_JOIN|EQ:op0.id=op1.id|"
+        + "OTHER:op0.int_col != op1.int_col|WHERE:%s|"
+        + "LEFT:%s|RIGHT:%s|";
+
+    String expectedER =
+        String.format(keyFmt, "op1.`year` = 2010", leftScanER, rightScanER);
+    String expectedIPC =
+        String.format(keyFmt, "op1.`year`=<CONST>", leftScanIPC, rightScanIPC);
+    assertEquals(expectedER, join.generateHboKeyString(
+        THboStatsType.CARDINALITY, CanonicalizationStrategy.EXPR_REWRITE));
+    assertEquals(expectedIPC, join.generateHboKeyString(
+        THboStatsType.CARDINALITY,
+        CanonicalizationStrategy.IGNORE_PARTITION_CONSTANTS));
+  }
+
+  @Test
+  public void testAggOnInnerJoin() throws ImpalaException {
+    // An aggregation on top of a join whose grouping columns come from different join
+    // operands must qualify each column with its canonical operand index.
+    String q1 = "select a.int_col, b.bigint_col, count(*) "
+        + "from functional.alltypes a join functional.alltypestiny b on a.id = b.id "
+        + "group by a.int_col, b.bigint_col";
+    String q2 = "select b.int_col, a.bigint_col, count(*) "
+        + "from functional.alltypes a join functional.alltypestiny b on a.id = b.id "
+        + "group by b.int_col, a.bigint_col";
+
+    // Plan IDs
+    final int PREAGG_ID = 3;
+    final int FINAL_AGG_ID = 6;
+
+    // Operands sort by table name: alltypes is operand 0, alltypestiny operand 1.
+    // Neither table has partition predicates so both strategies match.
+    String childKey = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + "CARDINALITY:ScanNode:functional.alltypes|,"
+        + "CARDINALITY:ScanNode:functional.alltypestiny|]|PREDS:[op0.id=op1.id]";
+    String q1Group = "0:GROUP:op0.int_col,op1.bigint_col";
+    String q2Group = "0:GROUP:op0.bigint_col,op1.int_col";
+    String preaggFmt = "CARDINALITY:AggregationNode:FIRST|preagg:true|groupingSet:false|"
+        + "AggClasses:[%s]|CHILD:[" + childKey + "]";
+    String finalFmt = "CARDINALITY:AggregationNode:FIRST|preagg:false|groupingSet:false|"
+        + "AggClasses:[%s]|CHILD:[" + childKey + "]";
+
+    Map<Integer, PlanNode> q1Nodes = collectPlanNodesInDistributedPlan(q1);
+    Map<Integer, PlanNode> q2Nodes = collectPlanNodesInDistributedPlan(q2);
+    AggregationNode q1Preagg = (AggregationNode) q1Nodes.get(PREAGG_ID);
+    AggregationNode q1Final = (AggregationNode) q1Nodes.get(FINAL_AGG_ID);
+    AggregationNode q2Preagg = (AggregationNode) q2Nodes.get(PREAGG_ID);
+    AggregationNode q2Final = (AggregationNode) q2Nodes.get(FINAL_AGG_ID);
+
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      // Exact keys. The pre-agg (FIRST phase) references base scan tuples directly; the
+      // final agg (MERGE phase) references substituted output slots, so its identical
+      // GROUP string verifies the source-expr tracing in resolveOperandIndex.
+      assertEquals(String.format(preaggFmt, q1Group),
+          q1Preagg.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertEquals(String.format(finalFmt, q1Group),
+          q1Final.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertEquals(String.format(preaggFmt, q2Group),
+          q2Preagg.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertEquals(String.format(finalFmt, q2Group),
+          q2Final.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+
+      // Swapped column-to-table assignment must hash differently, at every agg phase.
+      assertNotEquals("Pre-agg keys must differ for " + strategy,
+          q1Preagg.generateHboKeyString(THboStatsType.CARDINALITY, strategy),
+          q2Preagg.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertNotEquals("Final agg keys must differ for " + strategy,
+          q1Final.generateHboKeyString(THboStatsType.CARDINALITY, strategy),
+          q2Final.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+    }
+  }
+
+  @Test
+  public void testAggOnMultiLevelJoinOperands() throws ImpalaException {
+    // An aggregation above an OUTER join whose preserved side is itself a multi-table
+    // join must distinguish columns from the different tables on that side. Both t1
+    // (alltypes) and t2 (alltypestiny) sit on the LEFT (preserved) side of the
+    // LEFT OUTER JOIN.
+    String q1 = "select t1.int_col, t2.bigint_col, count(*) "
+        + "from functional.alltypes t1 "
+        + "join functional.alltypestiny t2 on t1.id = t2.id "
+        + "left join functional.alltypessmall t3 on t1.id = t3.id "
+        + "group by t1.int_col, t2.bigint_col";
+    String q2 = "select t1.bigint_col, t2.int_col, count(*) "
+        + "from functional.alltypes t1 "
+        + "join functional.alltypestiny t2 on t1.id = t2.id "
+        + "left join functional.alltypessmall t3 on t1.id = t3.id "
+        + "group by t1.bigint_col, t2.int_col";
+
+    // Plan IDs
+    final int PREAGG_ID = 5;
+    final int FINAL_AGG_ID = 10;
+
+    // The LEFT side is an inner group with operands sorted [alltypes, alltypestiny], so
+    // within it alltypes=op0.0 and alltypestiny=op0.1; alltypessmall is the outer join's
+    // right operand (op1, unused by the grouping). No partition predicates, so both
+    // strategies match. The outer join's own predicate "t1.id = t3.id" qualifies t1
+    // (alltypes) with its nested operand path op0.0, not the flat op0.
+    String innerGroup = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + "CARDINALITY:ScanNode:functional.alltypes|,"
+        + "CARDINALITY:ScanNode:functional.alltypestiny|]|PREDS:[op0.id=op1.id]";
+    String childKey = "CARDINALITY:JoinNode:LEFT_OUTER_JOIN|EQ:op0.0.id=op1.id|"
+        + "LEFT:" + innerGroup + "|RIGHT:CARDINALITY:ScanNode:functional.alltypessmall||";
+    String q1Group = "0:GROUP:op0.0.int_col,op0.1.bigint_col";
+    String q2Group = "0:GROUP:op0.0.bigint_col,op0.1.int_col";
+    String preaggFmt = "CARDINALITY:AggregationNode:FIRST|preagg:true|groupingSet:false|"
+        + "AggClasses:[%s]|CHILD:[" + childKey + "]";
+    String finalFmt = "CARDINALITY:AggregationNode:FIRST|preagg:false|groupingSet:false|"
+        + "AggClasses:[%s]|CHILD:[" + childKey + "]";
+
+    Map<Integer, PlanNode> q1Nodes = collectPlanNodesInDistributedPlan(q1);
+    Map<Integer, PlanNode> q2Nodes = collectPlanNodesInDistributedPlan(q2);
+    AggregationNode q1Preagg = (AggregationNode) q1Nodes.get(PREAGG_ID);
+    AggregationNode q1Final = (AggregationNode) q1Nodes.get(FINAL_AGG_ID);
+    AggregationNode q2Preagg = (AggregationNode) q2Nodes.get(PREAGG_ID);
+    AggregationNode q2Final = (AggregationNode) q2Nodes.get(FINAL_AGG_ID);
+
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      assertEquals(String.format(preaggFmt, q1Group),
+          q1Preagg.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertEquals(String.format(finalFmt, q1Group),
+          q1Final.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertEquals(String.format(preaggFmt, q2Group),
+          q2Preagg.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertEquals(String.format(finalFmt, q2Group),
+          q2Final.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+
+      assertNotEquals("Nested-operand column swap must hash differently for " + strategy,
+          q1Preagg.generateHboKeyString(THboStatsType.CARDINALITY, strategy),
+          q2Preagg.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+      assertNotEquals("Nested-operand column swap must hash differently for " + strategy,
+          q1Final.generateHboKeyString(THboStatsType.CARDINALITY, strategy),
+          q2Final.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+    }
+  }
+
+  @Test
+  public void testMultiLevelOpIndexUnderLeftJoin() throws ImpalaException {
+    // The conjunct "t1.id + t2.id = t3.id" mixes columns from different operands.
+    // Each column must be qualified with a unique prefix.
+    String query = "select t1.int_col, t2.int_col, t3.int_col "
+        + "from functional.alltypes t1 "
+        + "join functional.alltypestiny t2 on t1.id = t2.id "
+        + "left join functional.alltypessmall t3 on t1.id + t2.id = t3.id";
+
+    // The LEFT side is an inner group with operands sorted [alltypes, alltypestiny], so
+    // within it alltypes (t1) = op0.0 and alltypestiny (t2) = op0.1; alltypessmall (t3)
+    // is the outer join's right operand (op1). The eqJoinConjunct's LHS "t1.id + t2.id"
+    // thus renders as "op0.0.id + op0.1.id".
+    String innerJoinKey = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + "CARDINALITY:ScanNode:functional.alltypes|,"
+        + "CARDINALITY:ScanNode:functional.alltypestiny|]|PREDS:[op0.id=op1.id]";
+    String leftJoinKey = "CARDINALITY:JoinNode:LEFT_OUTER_JOIN|"
+        + "EQ:op0.0.id + op0.1.id=op1.id|"
+        + "LEFT:" + innerJoinKey + "|"
+        + "RIGHT:CARDINALITY:ScanNode:functional.alltypessmall||";
+
+    Map<Integer, PlanNode> nodes = collectPlanNodesInDistributedPlan(query);
+    JoinNode leftJoin = (JoinNode) nodes.get(4);
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      assertEquals(leftJoinKey,
+          leftJoin.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+    }
+  }
+
+  @Test
+  public void testMultiLevelOpIndexUnderInnerJoin() throws ImpalaException {
+    // The conjunct "t1.id + t2.id = t3.id" mixes columns from different operands.
+    // Each column must be qualified with a unique prefix.
+    String query = "select t1.int_col, t2.int_col, t3.int_col "
+        + "from functional.alltypestiny t1 "
+        + "left join functional.alltypes t2 on t1.id = t2.id "
+        + "join functional.alltypessmall t3 on t1.id + t2.id = t3.id";
+    Map<Integer, PlanNode> nodes = collectPlanNodesInDistributedPlan(query);
+    String leftJoinKey = "CARDINALITY:JoinNode:LEFT_OUTER_JOIN|EQ:op0.id=op1.id|"
+        + "LEFT:CARDINALITY:ScanNode:functional.alltypestiny||"
+        + "RIGHT:CARDINALITY:ScanNode:functional.alltypes||";
+    String innerJoinKey = "CARDINALITY:JoinGroup:INNER|OPERANDS:[" + leftJoinKey
+        + ",CARDINALITY:ScanNode:functional.alltypessmall|]|"
+        + "PREDS:[op0.0.id + op0.1.id=op1.id]";
+    JoinNode innerJoin = (JoinNode) nodes.get(5);
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      assertEquals(innerJoinKey,
+          innerJoin.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+    }
+  }
+
+  @Test
+  public void testMultiTableInPredicate() throws ImpalaException {
+    // Test IN predicate referencing a partitioned table and a non-partitioned table
+    // is not canonicalized as a partition equality predicate.
+    String query = "select t1.id "
+        + "from functional.alltypestiny t1, functional.alltypesnopart t2 "
+        + "where t1.id IN (1, 2, t2.id)";
+    JoinNode join = singleJoin(query);
+    String expectedKey = "CARDINALITY:JoinGroup:INNER|OPERANDS:["
+        + "CARDINALITY:ScanNode:functional.alltypesnopart|,"
+        + "CARDINALITY:ScanNode:functional.alltypestiny|]|"
+        + "PREDS:[op1.id IN (1, 2, op0.id)]";
+    for (CanonicalizationStrategy strategy : CanonicalizationStrategy.values()) {
+      assertEquals(expectedKey,
+          join.generateHboKeyString(THboStatsType.CARDINALITY, strategy));
+    }
+  }
 }

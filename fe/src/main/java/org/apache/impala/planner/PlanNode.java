@@ -211,6 +211,14 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   // True if the cardinality is from HBO stats.
   protected boolean hasHboCard_ = false;
 
+  // Cached result for getHboOrderedOperands(). See more in method comments.
+  private List<PlanNode> hboOrderedOperands_;
+
+  // Cached result for buildHboOperandQualifierMap(). See more in method comments.
+  private Map<TupleId, String> hboOperandQualifierMap_;
+  // True if hboOperandQualifierMap_ is computed even if it's null.
+  private boolean hboOperandQualifierMapComputed_ = false;
+
   protected PlanNode(PlanNodeId id, List<TupleId> tupleIds, String displayName) {
     this(id, displayName);
     tupleIds_.addAll(tupleIds);
@@ -363,6 +371,7 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
   protected void setDisplayName(String s) { displayName_ = s; }
 
   final protected String getDisplayLabel() {
+    if (id_ == null) return displayName_;
     return String.format("%s:%s", id_.toString(), displayName_);
   }
 
@@ -1029,21 +1038,38 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
    */
   public boolean isCardinalityPreserving() { return false; }
 
+  /**
+   * Returns true if parent node can reference operand alias in/under this node.
+   */
+  public boolean isOperandTransparent() { return false; }
+
   record HboKeyedNode(String key, int originalIndex, PlanNode node) {}
 
   /**
-   * Returns children_ sorted by their concatenated and sorted scan table names.
-   * The sort is stable so two children with the same names preserve their original order
-   * in the query. Another query that flips their order will have a different HBO key
-   * string, which misses the HBO stats. Such cases are rare in practice, so we don't
-   * optimize them for simplicity. The returned list is cached and reused since the order
-   * depends only on table names, which are fixed after tree construction.
+   * Returns the logical operands of this node that should be HBO-ordered by
+   * {@link #getHboOrderedOperands}. Defaults to children_ (e.g. UnionNode's operands are
+   * its children). Nodes whose operand list isn't simply children_ (e.g. JoinNode, which
+   * flattens a contiguous inner/cross join group) override this.
+   */
+  protected List<PlanNode> getFlattenOperands() { return children_; }
+
+  /**
+   * Returns getFlattenOperands() sorted by each operand's concatenated and sorted scan
+   * table names. The sort is stable that two operands with the same names keep their
+   * order in the query. Another query that flips their order will have a different HBO
+   * key string, which misses the HBO stats. Such cases are rare in practice, so we don't
+   * optimize them for simplicity.
+   * The returned list is cached and reused to ensure all the callers get a consistent
+   * view regardless of tree structure changes. E.g. join inversion swaps children in
+   * place. Recomputing the list would flip operands on the same table, which changes the
+   * HBO key and is what we want to avoid.
    */
   protected List<PlanNode> getHboOrderedOperands() {
     if (hboOrderedOperands_ == null) {
-      hboOrderedOperands_ = IntStream.range(0, children_.size())
+      List<PlanNode> operands = getFlattenOperands();
+      hboOrderedOperands_ = IntStream.range(0, operands.size())
           .mapToObj(i -> {
-            PlanNode node = children_.get(i);
+            PlanNode node = operands.get(i);
             List<ScanNode> scans = new ArrayList<>();
             node.collect(ScanNode.class, scans);
             String key = scans.stream()
@@ -1059,7 +1085,45 @@ abstract public class PlanNode extends TreeNode<PlanNode> {
     }
     return hboOrderedOperands_;
   }
-  private List<PlanNode> hboOrderedOperands_;
+
+  /**
+   * Returns the canonical operand-qualifier map (TupleId -> operand path) that this
+   * node's subtree exposes, or null when the subtree exposes no join - and thus a single
+   * operand whose columns need no qualification (a scan/union/aggregation, possibly
+   * wrapped by operand-transparent nodes).
+   * The map is built (and cached) only when this node is a join, or an
+   * operand-transparent nodes wrapping one, so that a node on top of a join - e.g. an
+   * aggregation qualifying its grouping and HAVING columns, or the join itself qualifying
+   * its predicates - can distinguish columns coming from different join operands, e.g.
+   * "GROUP BY a.int_col, b.bigint_col" and "GROUP BY b.int_col, a.bigint_col" hash
+   * differently.
+   * Note that we cache the map to ensure all the callers get a consistent view regardless
+   * of tree structure changes, e.g. due to join inversion.
+   */
+  Map<TupleId, String> buildHboOperandQualifierMap() {
+    if (hboOperandQualifierMapComputed_) return hboOperandQualifierMap_;
+    hboOperandQualifierMapComputed_ = true;
+    PlanNode base = JoinNode.skipOperandTransparentNodes(this);
+    if (base instanceof JoinNode) {
+      hboOperandQualifierMap_ = new HashMap<>();
+      base.appendHboOperandQualifiers("", hboOperandQualifierMap_);
+    }
+    return hboOperandQualifierMap_;
+  }
+
+  /**
+   * Assigns each base tuple of this operand subtree a canonical operand path (see
+   * {@link JoinNode#appendHboOperandQualifiers}). This base-case implementation handles
+   * an opaque leaf operand: a single-tuple node (scan, final aggregation, union)
+   * whose one tuple takes 'prefix'. Any node exposing multiple tuples should override
+   * this to recurse into its operands.
+   */
+  protected void appendHboOperandQualifiers(String prefix, Map<TupleId, String> out) {
+    Preconditions.checkState(getTupleIds().size() == 1,
+        "%s has %s tuples so should override appendHboOperandQualifiers()",
+        getDisplayLabel(), getTupleIds().size());
+    out.put(getTupleIds().get(0), prefix);
+  }
 
   /**
    * Generates an HBO key string for this node, or null if HBO is not supported.

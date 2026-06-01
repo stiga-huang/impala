@@ -844,10 +844,20 @@ public class AggregationNode extends PlanNode implements SpillableOperator {
         .append("|");
     if (limit_ > 0) sb.append("limit:").append(limit_).append("|");
 
+    // When the aggregation sits on top of a join (directly or through
+    // operand-transparent nodes), qualify grouping/HAVING columns with the join's
+    // canonical operand index so that columns from different operands are
+    // distinguishable, e.g. "GROUP BY a.int_col, b.bigint_col" vs
+    // "GROUP BY b.int_col, a.bigint_col". A subtree with no join (e.g. a scan or union
+    // node) exposes a single tuple set with no such ambiguity, so its columns are left
+    // unqualified (buildHboOperandQualifierMap returns null).
+    Map<TupleId, String> operandIdx = baseChild.buildHboOperandQualifierMap();
+
     List<String> aggClassStrings = new ArrayList<>(aggInfos_.size());
     for (AggregateInfo aggInfo : aggInfos_) {
       List<Expr> groupingExprs = aggInfo.getGroupingExprs();
-      List<String> groupingStrs = ExprCanonicalizer.canonicalizeExprs(groupingExprs);
+      List<String> groupingStrs = ExprCanonicalizer.canonicalizeExprs(
+          groupingExprs, CanonicalizationStrategy.EXPR_REWRITE, operandIdx);
       aggClassStrings.add("GROUP:" + String.join(",", groupingStrs));
     }
     Collections.sort(aggClassStrings);
@@ -857,7 +867,8 @@ public class AggregationNode extends PlanNode implements SpillableOperator {
     sb.append("AggClasses:[").append(String.join(",", aggClassStrings)).append("]|");
 
     if (!conjuncts_.isEmpty()) {
-      List<String> conjunctStrs = ExprCanonicalizer.canonicalizeExprs(conjuncts_);
+      List<String> conjunctStrs = ExprCanonicalizer.canonicalizeExprs(
+          conjuncts_, CanonicalizationStrategy.EXPR_REWRITE, operandIdx);
       sb.append("HAVING:").append(String.join(",", conjunctStrs)).append("|");
     }
 

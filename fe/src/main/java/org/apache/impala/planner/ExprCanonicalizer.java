@@ -19,15 +19,24 @@ package org.apache.impala.planner;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.apache.impala.analysis.BinaryPredicate;
 import org.apache.impala.analysis.Expr;
 import org.apache.impala.analysis.InPredicate;
 import org.apache.impala.analysis.LiteralExpr;
+import org.apache.impala.analysis.SlotDescriptor;
+import org.apache.impala.analysis.SlotId;
 import org.apache.impala.analysis.SlotRef;
 import org.apache.impala.analysis.ToSqlOptions;
+import org.apache.impala.analysis.TupleDescriptor;
+import org.apache.impala.analysis.TupleId;
 import org.apache.impala.catalog.FeTable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Utility class for canonicalizing expressions for History-Based Optimization (HBO).
@@ -42,6 +51,7 @@ import org.apache.impala.catalog.FeTable;
  * so we don't need to redo it here.
  */
 public class ExprCanonicalizer {
+  private final static Logger LOG = LoggerFactory.getLogger(ExprCanonicalizer.class);
 
   // Placeholder string used when removing constants from predicates
   private static final String CONST = "<CONST>";
@@ -79,14 +89,155 @@ public class ExprCanonicalizer {
   }
 
   /**
-   * Canonicalizes a list of expressions for HBO keys on non-scan plan nodes,
-   * e.g. aggregation nodes.
+   * Canonicalizes a list of expressions for HBO keys on non-scan plan nodes, qualifying
+   * each column with its canonical operand index (see {@link #qualifyForHbo}) when
+   * 'operandIdx' is provided. Used for the single-operand WHERE conjuncts of a join
+   * node so that columns of different operands are distinguishable.
    */
-  public static List<String> canonicalizeExprs(List<Expr> exprs) {
-    // TODO: AggregationNode won't have partition predicates that need canonicalization
-    // since they are all applied on the scan node. Revisit this when we support more
-    // non-scan plan nodes.
-    return canonicalizeScanConjuncts(exprs, null, CanonicalizationStrategy.EXPR_REWRITE);
+  public static List<String> canonicalizeExprs(List<Expr> exprs,
+      CanonicalizationStrategy strategy, Map<TupleId, String> operandIdx) {
+    return canonicalizeScanConjuncts(qualifyForHbo(exprs, operandIdx), null, strategy);
+  }
+
+  /**
+   * Canonicalizes join predicates for HBO keys, qualifying each column with its
+   * canonical operand index (see {@link #qualifyForHbo}) when 'operandIdx' is provided.
+   * Qualification disambiguates predicates that would otherwise collapse to the same
+   * string, e.g. "a.id = b.int_col" vs "b.id = a.int_col" both rendering as
+   * "id = int_col".
+   */
+  public static List<String> canonicalizeJoinConjuncts(List<Expr> exprs,
+      CanonicalizationStrategy strategy, Map<TupleId, String> operandIdx) {
+    if (exprs == null || exprs.isEmpty()) return Collections.emptyList();
+    List<String> result = new ArrayList<>();
+    for (Expr expr : qualifyForHbo(exprs, operandIdx)) {
+      result.add(canonicalizeJoinConjunct(expr, strategy));
+    }
+    Collections.sort(result);
+    return result;
+  }
+
+  /**
+   * Returns a list of deep clones of 'exprs' whose SlotRefs are tagged with their
+   * canonical operand qualifier, or the original list unchanged when there is nothing
+   * to qualify (null/empty 'operandIdx'). The originals are never mutated.
+   */
+  private static List<Expr> qualifyForHbo(List<Expr> exprs,
+      Map<TupleId, String> operandIdx) {
+    if (operandIdx == null || operandIdx.isEmpty()) return exprs;
+    List<Expr> result = new ArrayList<>(exprs.size());
+    boolean changed = false;
+    for (Expr expr : exprs) {
+      Expr newExpr = qualifyForHbo(expr, operandIdx);
+      if (expr != newExpr) changed = true;
+      result.add(newExpr);
+    }
+    return changed ? result : exprs;
+  }
+
+  /**
+   * Returns a deep clone of 'expr' whose SlotRefs are tagged with a canonical operand
+   * qualifier ("op<path>") so that FOR_HBO rendering records which operand each column
+   * belongs to. Returns the original Expr if nothing needs qualification.
+   */
+  private static Expr qualifyForHbo(Expr expr, Map<TupleId, String> operandIdx) {
+    Expr clone = expr.clone();
+    List<Expr> nodes = clone.getNodesPreOrder();
+    boolean changed = false;
+    for (Expr node : nodes) {
+      if (!(node instanceof SlotRef)) continue;
+      SlotRef slot = (SlotRef) node;
+      String path = resolveOperandIndex(slot, operandIdx);
+      if (path != null) {
+        changed = true;
+        slot.setHboQualifier("op" + path);
+      }
+    }
+    return changed ? clone : expr;
+  }
+
+  /**
+   * Returns the canonical operand path of 'slot', i.e. the path mapped to the first of
+   * its enclosing tuples present in 'operandIdx', or null if none is found (defensive;
+   * a join-predicate slot is expected to be bound by exactly one operand subtree).
+   */
+  private static String resolveOperandIndex(SlotRef slot,
+      Map<TupleId, String> operandIdx) {
+    return resolveOperandIndex(slot.getDesc(), operandIdx, new HashSet<>());
+  }
+
+  /**
+   * Resolves the canonical operand path of the slot described by 'desc': the path mapped
+   * to the first of its enclosing tuples present in 'operandIdx'. When 'desc' is a
+   * substituted slot whose enclosing tuple is not an operand tuple (e.g. a merge or
+   * transpose aggregation's output slot, whose enclosing tuple is the aggregation tuple),
+   * the search follows the slot's single source expr down to the base operand tuple. This
+   * mirrors how {@link SlotRef#toSqlImpl} recovers the column name from the source expr,
+   * so the qualifier and the rendered column stay consistent across aggregation phases.
+   *
+   * Slots with more than one source expr, or a non-SlotRef source, are left unqualified
+   * (returns null). In particular a UNION output slot has one source expr per branch and
+   * cannot be attributed to a single operand. 'visited' guards against cycles in the
+   * source-expr chain.
+   */
+  private static String resolveOperandIndex(SlotDescriptor desc,
+      Map<TupleId, String> operandIdx, Set<SlotId> visited) {
+    if (desc == null || !visited.add(desc.getId())) return null;
+    for (TupleDescriptor tupleDesc : desc.getEnclosingTupleDescs()) {
+      String path = operandIdx.get(tupleDesc.getId());
+      if (path != null) return path;
+    }
+    // Substituted slot: trace through the single source column reference to its operand.
+    List<Expr> sourceExprs = desc.getSourceExprs();
+    if (sourceExprs.size() != 1 || !(sourceExprs.get(0) instanceof SlotRef)) return null;
+    return resolveOperandIndex(
+        ((SlotRef) sourceExprs.get(0)).getDesc(), operandIdx, visited);
+  }
+
+  private static String canonicalizeJoinConjunct(Expr expr,
+      CanonicalizationStrategy strategy) {
+    // For symmetric equality predicates (EQ, NOT_DISTINCT), the two operands are sorted
+    // so that join key order is independent of left/right child ordering.
+    if (expr instanceof BinaryPredicate) {
+      BinaryPredicate binPred = (BinaryPredicate) expr;
+      if (binPred.getOp() == BinaryPredicate.Operator.EQ
+          || binPred.getOp() == BinaryPredicate.Operator.NOT_DISTINCT) {
+        String lhs = binPred.getChild(0).toSql(ToSqlOptions.FOR_HBO);
+        String rhs = binPred.getChild(1).toSql(ToSqlOptions.FOR_HBO);
+        if (lhs.compareTo(rhs) > 0) {
+          String tmp = lhs;
+          lhs = rhs;
+          rhs = tmp;
+        }
+        return lhs + binPred.getOp().toString() + rhs;
+      }
+    }
+    return canonicalizeExpr(expr, null, strategy);
+  }
+
+  /**
+   * Resolves the table an expression's columns belong to by inspecting its SlotRefs.
+   * Returns null if the expression references columns from multiple or no tables.
+   */
+  private static FeTable resolveSingleTable(Expr expr) {
+    List<SlotRef> slotRefs = new ArrayList<>();
+    expr.collect(SlotRef.class, slotRefs);
+    FeTable table = null;
+    for (SlotRef ref : slotRefs) {
+      SlotDescriptor desc = ref.getDesc();
+      if (desc == null || desc.getParent() == null) continue;
+      FeTable t = desc.getParent().getTable();
+      if (table == null) {
+        table = t;
+      } else if (table != t) {
+        if (LOG.isTraceEnabled()) {
+          LOG.trace("Expr {} references columns from different tables: {} and {}",
+              expr.toSql(), table.getFullName(), t.getFullName());
+        }
+        return null;
+      }
+    }
+    return table;
   }
 
   /**
@@ -94,6 +245,9 @@ public class ExprCanonicalizer {
    */
   private static String canonicalizeExpr(Expr expr, FeTable table,
       CanonicalizationStrategy strategy) {
+    // Non-scan callers (e.g. a join node's retained WHERE conjuncts) pass no table.
+    // Resolve it from the expression's own slots.
+    if (table == null) table = resolveSingleTable(expr);
     // Remove constants only from partition column equality predicates when the strategy
     // is not EXPR_REWRITE (i.e. more aggressive than EXPR_REWRITE).
     boolean shouldRemoveConstants = false;

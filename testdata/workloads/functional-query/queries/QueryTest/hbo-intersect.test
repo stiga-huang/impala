@@ -1,0 +1,78 @@
+====
+---- QUERY
+# EXPLAIN the same query that has been executed
+EXPLAIN select id from functional.alltypes where string_col != 'test_intersect'
+  intersect
+  select id from functional.alltypestiny where string_col != 'test_intersect'
+---- PLAN
+PLAN-ROOT SINK
+|
+07:EXCHANGE [UNPARTITIONED]
+|
+03:HASH JOIN [LEFT SEMI JOIN, PARTITIONED]
+|  hash predicates: id IS NOT DISTINCT FROM id
+|  row-size=4B cardinality=8 (from HBO)
+|
+|--06:EXCHANGE [HASH(id)]
+|  |
+|  02:SCAN HDFS [functional.alltypestiny]
+|     HDFS partitions=4/4 files=4 size=460B
+|     predicates: string_col != 'test_intersect'
+|     row-size=17B cardinality=8 (from HBO)
+|
+05:AGGREGATE [FINALIZE]
+|  group by: id
+|  row-size=4B cardinality=7.30K (from HBO)
+|
+04:EXCHANGE [HASH(id)]
+|
+01:AGGREGATE [STREAMING]
+|  group by: id
+|  row-size=4B cardinality=7.30K (from HBO)
+|
+00:SCAN HDFS [functional.alltypes]
+   HDFS partitions=24/24 files=24 size=478.45KB
+   predicates: string_col != 'test_intersect'
+   row-size=17B cardinality=7.30K (from HBO)
+====
+---- QUERY
+# EXPLAIN the rewritten query which is equivalent to the INTERSECT query
+EXPLAIN select * from (
+  select distinct id from functional.alltypes
+  where string_col != 'test_intersect'
+) t1
+where exists (
+  select 1 from functional.alltypestiny t2
+  where string_col != 'test_intersect' and t1.id <=> t2.id
+)
+---- PLAN
+PLAN-ROOT SINK
+|
+07:EXCHANGE [UNPARTITIONED]
+|
+03:HASH JOIN [LEFT SEMI JOIN, PARTITIONED]
+|  hash predicates: id IS NOT DISTINCT FROM id
+|  row-size=4B cardinality=8 (from HBO)
+|
+|--06:EXCHANGE [HASH(id)]
+|  |
+|  02:SCAN HDFS [functional.alltypestiny]
+|     HDFS partitions=4/4 files=4 size=460B
+|     predicates: string_col != 'test_intersect'
+|     row-size=17B cardinality=8 (from HBO)
+|
+05:AGGREGATE [FINALIZE]
+|  group by: id
+|  row-size=4B cardinality=7.30K (from HBO)
+|
+04:EXCHANGE [HASH(id)]
+|
+01:AGGREGATE [STREAMING]
+|  group by: id
+|  row-size=4B cardinality=7.30K (from HBO)
+|
+00:SCAN HDFS [functional.alltypes]
+   HDFS partitions=24/24 files=24 size=478.45KB
+   predicates: string_col != 'test_intersect'
+   row-size=17B cardinality=7.30K (from HBO)
+====
