@@ -43,6 +43,7 @@ class TestStatsExtrapolation(ImpalaTestSuite):
   def test_stats_extrapolation(self, vector, unique_database):
     vector.get_value('exec_option')['num_nodes'] = 1
     vector.get_value('exec_option')['explain_level'] = 2
+    vector.get_value('exec_option')['use_hbo_stats'] = 0
     self.run_test_case('QueryTest/stats-extrapolation', vector, unique_database)
 
   def test_compute_stats_tablesample(self, vector, unique_database):

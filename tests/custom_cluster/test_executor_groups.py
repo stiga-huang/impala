@@ -1051,6 +1051,7 @@ class TestExecutorGroups(CustomClusterTestSuite):
     # Some test case will change these options along the test, but should eventually
     # restored to this default values.
     self._set_query_options({
+      'USE_HBO_STATS': 0,
       'COMPUTE_PROCESSING_COST': 'true',
       'SLOT_COUNT_STRATEGY': 'PLANNER_CPU_ASK'})
 

@@ -126,6 +126,7 @@ class TestSpillingNoDebugActionDimensions(ImpalaTestSuite):
   def test_spilling_no_debug_action(self, vector):
     """Spilling tests that will not succeed if run with an arbitrary debug action.
        These tests either run with no debug action set or set their own debug action."""
+    vector.get_value('exec_option')['use_hbo_stats'] = 0
     self.run_test_case('QueryTest/spilling-no-debug-action', vector)
 
 

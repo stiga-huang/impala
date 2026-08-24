@@ -822,10 +822,10 @@ struct TQueryOptions {
   202: optional bool enable_explain_calcite = false;
 
   // See comment in ImpalaService.thrift
-  203: optional bool use_hbo_stats = false
+  203: optional bool use_hbo_stats = true
 
   // See comment in ImpalaService.thrift
-  204: optional bool store_hbo_stats = false
+  204: optional bool store_hbo_stats = true
 
   // See comment in ImpalaService.thrift
   205: optional bool aggregated_profile = false

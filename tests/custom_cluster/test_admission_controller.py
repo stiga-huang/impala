@@ -1326,6 +1326,7 @@ class TestAdmissionController(TestAdmissionControllerBase):
     # Set num_nodes to 1 since its easier to see one-to-one mapping of per_host and
     # per_cluster values used in the test.
     exec_options['num_nodes'] = 1
+    exec_options['use_hbo_stats'] = 0
     self.run_test_case('QueryTest/admission-max-min-mem-limits', vector)
 
   @pytest.mark.execute_serially
