@@ -19,11 +19,13 @@
 
 import getpass
 import http.client
+import logging
 import os.path
 import re
 import requests
 import subprocess
 import tempfile
+import time
 from os import environ
 from pywebhdfs.webhdfs import PyWebHdfsClient, errors, _raise_pywebhdfs_exception
 from xml.etree.ElementTree import parse
@@ -31,6 +33,8 @@ from xml.etree.ElementTree import parse
 from tests.util.filesystem_base import BaseFilesystem
 from tests.util.filesystem_utils import FILESYSTEM_PREFIX
 from tests.util.parse_util import bytes_to_str
+
+LOG = logging.getLogger(__name__)
 
 
 class HdfsConfig(object):
@@ -293,6 +297,15 @@ class HadoopFsCommandLineClient(BaseFilesystem):
   def exists(self, path):
     """Checks if a particular path exists"""
     (status, stdout, stderr) = self._hadoop_fs_shell(['-test', '-e', path])
+    # Retry for transient errors like S3 503 Slow Down. Path absence has empty stderr.
+    if status != 0 and not stderr.strip():
+      LOG.warning('{0} exists failed: '.format(self.filesystem_type) + stderr + "; " +
+                  stdout + ". Retry after 1s.")
+      time.sleep(1)
+      (status, stdout, stderr) = self._hadoop_fs_shell(['-test', '-e', path])
+      if status != 0 and not stderr.strip():
+        LOG.error('{0} exists failed: '.format(self.filesystem_type) + stderr + "; " +
+                  stdout)
     return status == 0
 
   def delete_file_dir(self, path, recursive=False):
