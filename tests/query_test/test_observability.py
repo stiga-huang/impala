@@ -1431,3 +1431,17 @@ class TestQueryStates(ImpalaTestSuite):
       assert int(count_str) > 0, \
           "Node count should be positive, got {0} in: {1}\nFull profile:\n{2}".format(
               count_str, os_info, profile)
+
+  def test_subplan_summary(self):
+    """Verify that the actual #Rows column is correct for top-level SubplanNodes"""
+    query = "select id, a.item from functional_parquet.complextypes_arrays t, t.arr1 a"
+    test_cases = {
+      query: 22,
+      query + ' limit 10': 10,
+      "select count(*) from functional_parquet.arrays_big t, t.int_array a": 19487
+    }
+    for q, n in test_cases.items():
+      result = self.client.execute(q, fetch_exec_summary=True)
+      for rows in result.exec_summary:
+        if rows['operator'].endswith(':SUBPLAN'):
+          assert rows['num_rows'] == n
