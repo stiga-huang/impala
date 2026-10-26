@@ -174,7 +174,6 @@ Status SubplanNode::Reset(RuntimeState* state, RowBatch* row_batch) {
   input_eos_ = false;
   input_row_idx_ = 0;
   subplan_eos_ = false;
-  SetNumRowsReturned(0);
   RETURN_IF_ERROR(child(0)->Reset(state, row_batch));
   // If child(1) is not open it means that we have just Reset() it and returned from
   // GetNext() without opening it again. It is not safe to call Reset() on the same
